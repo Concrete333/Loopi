@@ -273,11 +273,11 @@ Dialectic exposes separate loop controls because different tasks need different 
 
 That means you can do things like:
 
--loop the plan multiple times before implementation starts
--keep implementation cheap but review-heavy
--run more repair cycles only when a task is broken into units
--increase quality pressure without paying for your most expensive model at every stage
--let a workflow keep improving while you are away instead of stopping after one pass
+- loop the plan multiple times before implementation starts
+- keep implementation cheap but review-heavy
+- run more repair cycles only when a task is broken into units
+- increase quality pressure without paying for your most expensive model at every stage
+- let a workflow keep improving while you are away instead of stopping after one pass
 
 These loops are explicit and inspectable. Every pass writes artifacts, records which agent ran which stage, and leaves behind a workflow you can review, compare, and rerun later.
 
