@@ -1,0 +1,118 @@
+{
+  "oneShotExample": {
+    "mode": "one-shot",
+    "prompt": "Describe the work you want the agent loop to handle end-to-end.",
+    "customImplementPrompt": "Keep changes narrowly scoped to the current unit, prefer small reversible edits, and call out any blocker instead of guessing.",
+    "agents": ["claude", "codex", "gemini"],
+    "settings": {
+      "timeoutMs": 180000,
+      "continueOnError": false,
+      "writeScratchpad": true,
+      "qualityLoops": 2,
+      "implementLoops": 2,
+      "implementLoopsPerUnit": 3,
+      "oneShotOrigins": {
+        "plan": "claude",
+        "implement": "codex",
+        "review": "gemini"
+      },
+      "agentPolicies": {
+        "codex": { "canWrite": true }
+      },
+      "agentOptions": {
+        "codex": { "model": "gpt-5.4", "effort": "medium" },
+        "claude": { "model": "opus" },
+        "gemini": { "model": "gemini-2.5-flash" }
+      }
+    }
+  },
+  "oneShotWithFallbackExample": {
+    "mode": "one-shot",
+    "prompt": "Implement the feature end-to-end, but keep the backup path easy to swap if a provider is unavailable or too expensive right now.",
+    "customImplementPrompt": "Keep changes narrowly scoped, prefer small reversible edits, and stop to report blockers instead of guessing.",
+    "agents": ["claude", "codex", "gemini"],
+    "roles": {
+      "fallback": "claude"
+    },
+    "settings": {
+      "timeoutMs": 180000,
+      "continueOnError": false,
+      "writeScratchpad": true,
+      "qualityLoops": 2,
+      "implementLoops": 2,
+      "implementLoopsPerUnit": 3,
+      "oneShotOrigins": {
+        "plan": "gemini",
+        "implement": "codex",
+        "review": "claude"
+      },
+      "agentPolicies": {
+        "codex": { "canWrite": true }
+      },
+      "agentOptions": {
+        "codex": { "model": "gpt-5.4", "effort": "medium" },
+        "claude": { "model": "opus" },
+        "gemini": { "model": "gemini-2.5-flash" }
+      }
+    }
+  },
+  "oneShotAggressiveContextSavingsExample": {
+    "mode": "one-shot",
+    "prompt": "Implement the feature end-to-end while minimizing repeated context cost across planning, implementation, and review steps.",
+    "customImplementPrompt": "Prefer small reversible edits, keep the current unit self-contained, and report blockers instead of guessing.",
+    "agents": ["claude", "codex", "gemini"],
+    "context": {
+      "dir": "./context",
+      "deliveryPolicy": {
+        "default": "digest",
+        "implementInitial": "full",
+        "implementRepair": "none"
+      }
+    },
+    "settings": {
+      "timeoutMs": 180000,
+      "continueOnError": false,
+      "writeScratchpad": true,
+      "qualityLoops": 2,
+      "implementLoops": 2,
+      "implementLoopsPerUnit": 2,
+      "oneShotOrigins": {
+        "plan": "claude",
+        "implement": "codex",
+        "review": "gemini"
+      },
+      "agentPolicies": {
+        "codex": { "canWrite": true }
+      }
+    }
+  },
+  "reviewWithLocalProviderExample": {
+    "task": "Review and summarize this research document",
+    "mode": "review",
+    "agents": ["nim-local"],
+    "context": {
+      "dir": "./context",
+      "maxFilesPerPhase": {
+        "review": 6
+      },
+      "deliveryPolicy": {
+        "reviewInitial": "none",
+        "reviewParallel": "digest"
+      }
+    },
+    "providers": {
+      "nim-local": {
+        "type": "openai-compatible",
+        "baseUrl": "http://localhost:8000/v1",
+        "apiKey": "dummy",
+        "model": "Qwen/Qwen2.5-7B-Instruct",
+        "maxInputChars": 16000,
+        "local": true
+      }
+    },
+    "roles": {
+      "reviewer": "nim-local",
+      "fallback": "claude"
+    }
+  }
+}

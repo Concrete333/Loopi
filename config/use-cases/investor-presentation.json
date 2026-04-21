@@ -1,0 +1,21 @@
+{
+  "name": "investor-presentation",
+  "description": "Investor pitch decks structured as ordered slides",
+  "plan": {
+    "role": "You are an investor presentation planning agent.",
+    "objective": "Create a compelling pitch deck outline for the venture below.",
+    "output_style": {
+      "unit_kind": "slide",
+      "numbering": "sequential",
+      "allow_children": false
+    },
+    "required_fields_per_unit": ["purpose", "why", "validation"],
+    "guidance": "Structure the plan as a sequence of slides. Each slide should have a clear narrative purpose and support the overall investment thesis. Keep it concise."
+  },
+  "review": {
+    "guidance": "Evaluate the presentation flow, narrative coherence, and investor appeal. Flag slides that are redundant or lack persuasive impact."
+  },
+  "synthesis": {
+    "guidance": "Produce a revised slide deck that addresses the strongest reviewer points. Ensure smooth narrative flow from problem to ask."
+  }
+}

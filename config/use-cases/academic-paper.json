@@ -1,0 +1,21 @@
+{
+  "name": "academic-paper",
+  "description": "Research paper plans with hierarchical section structure and source research guidance",
+  "plan": {
+    "role": "You are a research planning agent.",
+    "objective": "Create a detailed paper outline for the research topic below.",
+    "output_style": {
+      "unit_kind": "section",
+      "numbering": "decimal-outline",
+      "allow_children": true
+    },
+    "required_fields_per_unit": ["purpose", "why", "research_needed"],
+    "guidance": "Structure the plan as a detailed paper outline. Every section and subsection should have a clear purpose and connection to the thesis. Identify specific source research needed before writing can begin."
+  },
+  "review": {
+    "guidance": "Evaluate the paper plan as an academic reviewer would. Focus on argument strength, evidence sufficiency, and structural coherence."
+  },
+  "synthesis": {
+    "guidance": "Produce a revised paper outline that addresses the strongest reviewer points. Maintain hierarchical section numbering."
+  }
+}

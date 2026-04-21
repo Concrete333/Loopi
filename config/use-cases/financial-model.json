@@ -1,0 +1,21 @@
+{
+  "name": "financial-model",
+  "description": "Financial model components with inputs, formulas, and outputs",
+  "plan": {
+    "role": "You are a financial modeling planning agent.",
+    "objective": "Create a structured financial model for the scenario below.",
+    "output_style": {
+      "unit_kind": "component",
+      "numbering": "sequential",
+      "allow_children": true
+    },
+    "required_fields_per_unit": ["purpose", "why", "inputs", "outputs"],
+    "guidance": "Structure the model as ordered components. Each component should specify its inputs, calculations, and outputs. Ensure components chain together logically."
+  },
+  "review": {
+    "guidance": "Evaluate the financial model for completeness, formula correctness, and logical flow between components. Flag missing inputs or undefined outputs."
+  },
+  "synthesis": {
+    "guidance": "Produce a revised financial model that addresses the strongest reviewer points. Ensure all inputs are sourced and all outputs feed into downstream components."
+  }
+}

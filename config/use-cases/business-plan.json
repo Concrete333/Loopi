@@ -1,0 +1,21 @@
+{
+  "name": "business-plan",
+  "description": "Strategic business plans with phased execution milestones",
+  "plan": {
+    "role": "You are a business strategy planning agent.",
+    "objective": "Create a structured business plan for the initiative below.",
+    "output_style": {
+      "unit_kind": "milestone",
+      "numbering": "phase",
+      "allow_children": true
+    },
+    "required_fields_per_unit": ["purpose", "why", "validation"],
+    "guidance": "Structure the plan as ordered milestones. Each milestone should have clear deliverables and measurable success criteria."
+  },
+  "review": {
+    "guidance": "Evaluate the business plan for market fit, financial viability, and risk exposure. Flag vague milestones that lack measurable outcomes."
+  },
+  "synthesis": {
+    "guidance": "Produce a revised business plan that addresses the strongest reviewer points. Ensure each milestone has clear acceptance criteria."
+  }
+}

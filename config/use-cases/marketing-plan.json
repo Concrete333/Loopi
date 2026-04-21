@@ -1,0 +1,21 @@
+{
+  "name": "marketing-plan",
+  "description": "Marketing campaign plans with ordered initiatives and KPIs",
+  "plan": {
+    "role": "You are a marketing strategy planning agent.",
+    "objective": "Create a structured marketing plan for the campaign below.",
+    "output_style": {
+      "unit_kind": "initiative",
+      "numbering": "sequential",
+      "allow_children": true
+    },
+    "required_fields_per_unit": ["purpose", "why", "kpis"],
+    "guidance": "Structure the plan as ordered initiatives. Each initiative should have clear KPIs, target channels, and measurable outcomes."
+  },
+  "review": {
+    "guidance": "Evaluate the marketing plan for channel fit, budget realism, and KPI clarity. Flag initiatives without measurable outcomes or overlapping scope."
+  },
+  "synthesis": {
+    "guidance": "Produce a revised marketing plan that addresses the strongest reviewer points. Ensure every initiative has specific, measurable KPIs."
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "dialectic",
+  "version": "0.1.0",
+  "description": "Orchestrate multiple AI coding CLIs in plan, review, implement, and one-shot loops.",
+  "main": "src/orchestrator.js",
+  "scripts": {
+    "start": "node src/orchestrator.js",
+    "cli": "node src/cli.js",
+    "cli:doctor": "node src/cli.js doctor",
+    "cli:plan": "node src/cli.js plan",
+    "cli:review": "node src/cli.js review",
+    "cli:implement": "node src/cli.js implement",
+    "cli:oneshot": "node src/cli.js oneshot",
+    "build:pack": "powershell -ExecutionPolicy Bypass -File scripts/build-pack.ps1",
+    "build:pack:verify": "powershell -ExecutionPolicy Bypass -File scripts/build-pack.ps1 -Verify",
+    "test": "node tests/run-all-tests.js",
+    "measure:context": "node scripts/measure-context-delivery.js"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "author": "cwbec",
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,21 @@
+{
+  "name": "coding",
+  "description": "Software implementation plans broken into ordered commit steps",
+  "plan": {
+    "role": "You are the planning agent in a multi-agent CLI bridge.",
+    "objective": "Create a practical implementation plan for the request below.",
+    "output_style": {
+      "unit_kind": "commit",
+      "numbering": "commit",
+      "allow_children": false
+    },
+    "required_fields_per_unit": ["purpose", "why", "validation"],
+    "guidance": "Focus on concrete, implementable steps ordered as commits. Each step should be independently verifiable. Avoid overengineering."
+  },
+  "review": {
+    "guidance": "Focus on whether each commit is clear, correctly ordered, and independently verifiable. Flag overengineering as firmly as missing work."
+  },
+  "synthesis": {
+    "guidance": "Produce a clean revised plan with ordered commits. Each step should be clear enough to implement directly."
+  }
+}
