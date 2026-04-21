@@ -100,6 +100,6 @@ If you need to understand the project quickly, start here:
 
 ## What this file is not
 
-This is not the internal development guide for building or extending Dialectic.
+This is not the internal development guide for building, packaging, or publishing Dialectic.
 
 It is only a concise public-facing orientation file to help AI agents and contributors navigate the codebase and understand the shipped product shape.
