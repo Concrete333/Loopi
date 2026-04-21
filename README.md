@@ -12,6 +12,15 @@ The result is simple:
 
 Dialectic is a source-available orchestration runtime for teams that want AI coding workflows to behave like systems, not improvisations.
 
+One fast example:
+
+- plan with Claude
+- implement with Codex or OpenCode
+- review with Gemini
+- rerun the same workflow later with different loop counts, fallback rules, or reference context
+
+That is the core idea. Dialectic turns "use multiple models" from a vague habit into a workflow you can actually inspect, reuse, and improve.
+
 ## Why Teams Get Excited About Dialectic
 
 ### 1. Make models disagree on purpose
@@ -113,6 +122,8 @@ Dialectic is not trying to replace the individual agent tools. It is the workflo
 - controlled reference context through a task-level `context` folder
 - context and fallback controls you can tune for cost, reliability, and review quality
 
+In practice, that means better output from the models you already use, with more visibility and less guesswork.
+
 ## Who It Is For
 
 - Developers who already use more than one coding agent or model
@@ -180,7 +191,7 @@ Task written. Starting run...
 
 If you answer `n` to `Run now?`, Dialectic writes `shared/task.json` and prints the command to run it later.
 
-A good first run is not “use every model.” It is:
+A good first run is not "use every model." It is:
 
 - one strong planner
 - one implementer
@@ -239,16 +250,21 @@ That means you can do things like:
 
 These loops are explicit and inspectable. Every pass writes artifacts, records which agent ran which stage, and leaves behind a workflow you can review and rerun later.
 
-## Licensing
+## Open Source and Support
 
-Dialectic is licensed under the Business Source License 1.1 (`BUSL-1.1`).
+Dialectic is open source under the Apache License 2.0.
 
-- Non-production use is permitted, including evaluation, development, testing, research, and personal or other non-commercial experimentation.
-- Production use requires a separate commercial license.
-- On `2029-04-21`, this version converts to the Apache License, Version 2.0.
-- For commercial licensing, contact: https://github.com/Concrete333
+You are free to use, modify, and build on the project under the terms of that license.
 
-See [LICENSE](./LICENSE) for the full license text and [LICENSING.md](./LICENSING.md) for plain-language examples of what counts as non-production and production use.
+If Dialectic is useful to you or your team, there are a few ways to support the work:
+
+- star and share the project on GitHub
+- open issues and suggestions
+- email `cb1384@exeter.ac.uk` for consulting, workflow design, implementation help, or custom integration support
+
+If your team likes the workflow but wants help applying it in practice, the consulting path is there to accelerate adoption rather than gate the software.
+
+See [LICENSE](./LICENSE) for the full license text and [LICENSING.md](./LICENSING.md) for a plain-language FAQ.
 
 ## Troubleshooting
 
@@ -272,7 +288,7 @@ The README is intentionally the front door. For deeper configuration and runtime
 Those tools are excellent at single-agent execution. Dialectic is for workflows where a single agent's blind spots are not acceptable.
 
 - Route plan, implement, and review to agents trained by different organizations on different data, so a single model's failure mode does not become the workflow's failure mode
-- Run implement → review → repair for as many cycles as the task needs, with a different reviewer each pass
+- Run implement -> review -> repair for as many cycles as the task needs, with a different reviewer each pass
 - Give the workflow an explicit body of reference material through the `context` folder instead of relying only on repo state or chat history
 - Mix CLI agents and OpenAI-compatible providers in the same workflow
 - Control which step can write and which steps stay read-only

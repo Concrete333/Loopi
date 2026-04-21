@@ -1,77 +1,73 @@
-# Licensing FAQ
+# Open Source and Support FAQ
 
-This file is a plain-language guide to the license terms in this repository. It is not legal advice. The controlling terms are in [LICENSE](./LICENSE).
+This file is a plain-language guide to how Dialectic is licensed and how to support the project. It is not legal advice. The controlling terms are in [LICENSE](./LICENSE).
 
-Dialectic is source-available under the Business Source License 1.1 (`BUSL-1.1`).
+Dialectic is open source under the Apache License 2.0.
 
-- Non-production use is permitted.
-- Production use requires a separate commercial license.
-- On `2029-04-21`, this version converts to the Apache License, Version 2.0.
-- Commercial licensing contact: https://github.com/Concrete333
+## Can I use Dialectic personally?
 
-## Common Examples
+Yes.
 
-### Personal evaluation
+## Can my company use Dialectic?
 
-Allowed.
+Yes, under the terms of the Apache License 2.0.
 
-Examples:
+## Do I need to pay for production use?
 
-- cloning the repo to explore it
-- testing workflows on your own machine
-- comparing Dialectic against other tools
+No.
 
-### Local development
+Dialectic is open source. There is no separate production-use license requirement under Apache-2.0.
 
-Allowed.
+## Then what is the support option for?
 
-Examples:
+The support option is for teams that want help with adoption, workflow advice, implementation help, or consulting.
 
-- building on top of Dialectic locally
-- editing prompts, config, or adapters for experimentation
-- running tests during development
+Support is not required to use the software under the open-source license.
 
-### Internal team use for development or evaluation
+## Why support the project?
 
-Allowed when the purpose is evaluation, development, testing, or internal research rather than running a live production workflow.
+Support helps fund:
 
-Examples:
+- continued maintenance
+- bug fixes
+- documentation
+- new features
+- long-term development of Dialectic and related tools
 
-- an engineering team trialing Dialectic before rollout
-- internal prototyping
-- team testing in a sandbox repo
+## Can I use Dialectic in internal tools, client work, or production systems?
 
-### CI and staging
+Yes, subject to the terms of the Apache License 2.0.
 
-Allowed when CI or staging is part of development, testing, validation, or non-production evaluation.
+If your team wants help with setup, workflow design, integration, or practical adoption, you can reach out separately for consulting or support.
 
-Examples:
+## Can I modify Dialectic?
 
-- running test suites in CI
-- using staging to validate changes before a purchase or rollout decision
-- QA and pre-production review workflows
+Yes, under the terms of the Apache License 2.0.
 
-If your CI or staging environment is supporting an ongoing live business workflow, customer delivery, or production operations, treat that as production use and obtain a commercial license.
+## Can I contribute back?
 
-### Customer-facing, client-delivery, or business-critical internal use
+Yes. Contributions, feedback, bug reports, and sponsorship are all welcome.
 
-This is production use and requires a separate commercial license.
+## How can I support the project?
 
-Examples:
+You can help by:
 
-- using Dialectic as part of a paid service or client delivery pipeline
-- running it inside a customer-facing product or platform
-- using it in a business-critical internal workflow that supports live operations
-- operating it as a permanent team service rather than evaluation or development tooling
+- starring the repo
+- sharing it with others
+- opening issues and suggestions
+- reaching out for consulting or implementation help
 
-### Demos
+## Consulting and support
 
-Short evaluation demos are generally non-production.
+If your team wants help with:
 
-Ongoing demos tied to sales delivery, customer operations, or a live service should be treated as production use.
+- structured AI workflow design
+- multi-agent orchestration
+- model-role assignment
+- refinement loop design
+- context and retrieval architecture
+- practical adoption of Dialectic
 
-## If You Are Unsure
+contact:
 
-If your use case sits between evaluation and production, contact the Licensor before proceeding:
-
-- Commercial licensing contact: https://github.com/Concrete333
+- cb1384@exeter.ac.uk
