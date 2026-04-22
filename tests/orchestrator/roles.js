@@ -1,7 +1,7 @@
 const {
   assert,
   PROJECT_ROOT,
-  DialecticOrchestrator,
+  LoopiOrchestrator,
   normalizeTaskConfig
 } = require('../orchestrator-test-helpers');
 const { startMockHttpServer, startSequentialMockHttpServer } = require('./http-helpers');
@@ -10,7 +10,7 @@ module.exports = async function registerRoleTests(test) {
   console.log('\norchestrator: Commit 15 - Role-to-provider mapping');
 
   await test('Planner role resolves to the configured provider for plan steps', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',
@@ -65,7 +65,7 @@ module.exports = async function registerRoleTests(test) {
   });
 
   await test('Missing role falls back to config.agents list', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',
@@ -110,7 +110,7 @@ module.exports = async function registerRoleTests(test) {
   });
 
   await test('Role-mapped participants do not rewrite run metadata or scratchpad agent lists', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',
@@ -134,7 +134,7 @@ module.exports = async function registerRoleTests(test) {
   });
 
   await test('roles.fallback retries a failed step once with fallback target', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const { port: primaryPort, close: closePrimary } = await startMockHttpServer(500, { error: 'primary down' });
     const { port: fallbackPort, close: closeFallback } = await startMockHttpServer(200, {
       choices: [{ message: { content: 'fallback succeeded' } }],
@@ -203,7 +203,7 @@ module.exports = async function registerRoleTests(test) {
   });
 
   await test('failed role fallback preserves the primary failure summary for error reporting', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const { port: primaryPort, close: closePrimary } = await startMockHttpServer(500, { error: 'primary down' });
     const { port: fallbackPort, close: closeFallback } = await startMockHttpServer(500, { error: 'fallback down' });
 
@@ -261,7 +261,7 @@ module.exports = async function registerRoleTests(test) {
   });
 
   await test('parallel review steps reserve unique step ids', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const { port: originPort, close: closeOrigin } = await startSequentialMockHttpServer([
       { choices: [{ message: { content: 'Initial review draft' } }], model: 'origin-model' },
       { choices: [{ message: { content: 'Synthesis summary' } }], model: 'origin-model' }

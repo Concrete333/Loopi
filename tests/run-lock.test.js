@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { acquireLock, releaseLock, isLockStale, __test } = require('../src/run-lock');
-const { DialecticOrchestrator } = require('../src/orchestrator');
+const { LoopiOrchestrator } = require('../src/orchestrator');
 const { normalizeTaskConfig } = require('../src/task-config');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -235,7 +235,7 @@ async function runTests() {
   await test('Non-local providers do not trigger the lock', async () => {
     const projectRoot = makeTempProjectRoot();
     try {
-      const orchestrator = new DialecticOrchestrator();
+      const orchestrator = new LoopiOrchestrator();
       orchestrator.projectRoot = projectRoot;
       orchestrator.sharedDir = path.join(projectRoot, 'shared');
       orchestrator.collaborationStore.projectRoot = projectRoot;

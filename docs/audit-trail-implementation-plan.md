@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add a lightweight, human-readable audit trail that lets someone go back through a Dialectic run and answer:
+Add a lightweight, human-readable audit trail that lets someone go back through a Loopi run and answer:
 
 - who did what
 - when they did it
@@ -23,11 +23,11 @@ This plan does **not** try to add:
 - UI dashboards
 - Git commit automation
 
-Git remains the underlying source of truth for file edits. Dialectic adds structured run-linked snapshots around that truth.
+Git remains the underlying source of truth for file edits. Loopi adds structured run-linked snapshots around that truth.
 
 ## Why This Approach
 
-Dialectic already records:
+Loopi already records:
 
 - run identity
 - step identity
@@ -51,7 +51,7 @@ The simplest efficient solution is:
 
 ### Existing run records
 
-Dialectic already writes:
+Loopi already writes:
 
 - `shared/scratchpad.txt`
 - `shared/log.json`
@@ -613,7 +613,7 @@ Add `tests/worktree-audit.test.js` with coverage for:
 
 ### Purpose
 
-Add the code that turns raw Git-capture output into Dialectic artifacts and patch files.
+Add the code that turns raw Git-capture output into Loopi artifacts and patch files.
 
 ### Changes
 
@@ -1050,4 +1050,4 @@ Phase 1 already solves the practical problem:
 - compare final states across runs
 - manually fork from a prior point with enough context to do it responsibly
 
-That is the simplest efficient implementation that fits Dialectic's current architecture.
+That is the simplest efficient implementation that fits Loopi's current architecture.

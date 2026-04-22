@@ -146,6 +146,64 @@ test('useCase defaults to null when absent', () => {
   assert.strictEqual(config.useCase, null);
 });
 
+test('fork defaults to null when absent', () => {
+  const config = normalizeTaskConfig(baseTask(), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.fork, null);
+});
+
+test('fork accepts required and optional lineage fields, trimmed', () => {
+  const config = normalizeTaskConfig(baseTask({
+    fork: {
+      forkedFromRunId: '  run-001  ',
+      forkedFromStepId: '  implement-2  ',
+      baseCommit: '  abc123  ',
+      reason: '  Retry with stronger review  ',
+      recordedBy: '  manual  '
+    }
+  }), { projectRoot: PROJECT_ROOT });
+
+  assert.deepStrictEqual(config.fork, {
+    forkedFromRunId: 'run-001',
+    forkedFromStepId: 'implement-2',
+    baseCommit: 'abc123',
+    reason: 'Retry with stronger review',
+    recordedBy: 'manual'
+  });
+});
+
+test('fork defaults recordedBy to manual when omitted', () => {
+  const config = normalizeTaskConfig(baseTask({
+    fork: {
+      forkedFromRunId: 'run-001'
+    }
+  }), { projectRoot: PROJECT_ROOT });
+
+  assert.strictEqual(config.fork.recordedBy, 'manual');
+});
+
+test('fork rejects non-object values', () => {
+  assert.throws(() => {
+    normalizeTaskConfig(baseTask({ fork: 'run-001' }), { projectRoot: PROJECT_ROOT });
+  }, /"fork" must be an object/);
+});
+
+test('fork rejects missing forkedFromRunId', () => {
+  assert.throws(() => {
+    normalizeTaskConfig(baseTask({ fork: {} }), { projectRoot: PROJECT_ROOT });
+  }, /fork\.forkedFromRunId must be a non-empty string/);
+});
+
+test('fork rejects blank optional strings', () => {
+  assert.throws(() => {
+    normalizeTaskConfig(baseTask({
+      fork: {
+        forkedFromRunId: 'run-001',
+        reason: '   '
+      }
+    }), { projectRoot: PROJECT_ROOT });
+  }, /fork\.reason must be a non-empty string when provided/);
+});
+
 test('useCase rejected for unsupported modes with explicit error', () => {
   assert.throws(() => {
     normalizeTaskConfig(baseTask({ mode: 'review', useCase: 'coding' }), { projectRoot: PROJECT_ROOT });

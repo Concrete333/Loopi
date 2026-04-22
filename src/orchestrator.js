@@ -25,10 +25,12 @@ const {
 } = require('./handoff');
 const { normalizeTaskConfig } = require('./task-config');
 const { CollaborationStore } = require('./collaboration-store');
+const { serializeTaskConfigForArtifact } = require('./cli-audit');
 const { buildContextIndex } = require('./context-index');
 const { selectContextForPhase } = require('./context-selection');
 const { collectPlanAnswers, normalizeClarifications } = require('./plan-questions');
 const { acquireLock, releaseLock } = require('./run-lock');
+const { captureWorktreeSnapshot } = require('./worktree-audit');
 const {
   resolveContextDelivery,
   resolveContextDeliveryForCycle
@@ -135,14 +137,14 @@ function describeStepFailure(step) {
 }
 
 function logOrchestratorInfo(message) {
-  if (process.env.DIALECTIC_SILENT === '1') {
+  if (process.env.LOOPI_SILENT === '1') {
     return;
   }
   console.log(`[orchestrator] ${message}`);
 }
 
 function logOrchestratorWarning(message) {
-  if (process.env.DIALECTIC_SILENT === '1') {
+  if (process.env.LOOPI_SILENT === '1') {
     return;
   }
   console.warn(`[orchestrator] Warning: ${message}`);
@@ -285,6 +287,72 @@ function buildPlanClarificationsArtifact({ runId, artifactId, cycleNumber, clari
         usedDefault: Boolean(item.usedDefault)
       }))
     }
+  };
+}
+
+function buildWorktreeSnapshotArtifact({
+  runId,
+  artifactId,
+  cycleNumber = null,
+  snapshot,
+  patchFile = null,
+  stagedPatchFile = null
+}) {
+  return {
+    type: 'worktree-snapshot',
+    id: artifactId,
+    taskId: runId,
+    createdAt: new Date().toISOString(),
+    cycleNumber: cycleNumber != null ? cycleNumber : null,
+    data: {
+      scope: snapshot.scope,
+      stepId: snapshot.stepId || null,
+      stage: snapshot.stage || null,
+      agent: snapshot.agent || null,
+      canWrite: Boolean(snapshot.canWrite),
+      gitAvailable: Boolean(snapshot.gitAvailable),
+      gitHead: snapshot.gitHead || null,
+      gitHeadShort: snapshot.gitHeadShort || null,
+      statusPorcelain: Array.isArray(snapshot.statusPorcelain) ? snapshot.statusPorcelain : [],
+      changedFiles: Array.isArray(snapshot.changedFiles) ? snapshot.changedFiles : [],
+      untrackedFiles: Array.isArray(snapshot.untrackedFiles) ? snapshot.untrackedFiles : [],
+      dirty: Boolean(snapshot.dirty),
+      patchFile: patchFile || null,
+      stagedPatchFile: stagedPatchFile || null,
+      captureError: snapshot.captureError || null
+    }
+  };
+}
+
+function buildForkRecordArtifact({
+  runId,
+  artifactId,
+  fork
+}) {
+  return {
+    type: 'fork-record',
+    id: artifactId,
+    taskId: runId,
+    createdAt: new Date().toISOString(),
+    data: {
+      forkedFromRunId: fork.forkedFromRunId,
+      forkedFromStepId: fork.forkedFromStepId || null,
+      baseCommit: fork.baseCommit || null,
+      reason: fork.reason || null,
+      recordedBy: fork.recordedBy || 'manual'
+    }
+  };
+}
+
+function serializeTaskRecord(config, run, projectRoot) {
+  return {
+    ...serializeTaskConfigForArtifact(config, projectRoot),
+    taskId: run.runId,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt || null,
+    durationMs: run.durationMs || null,
+    status: run.status,
+    error: run.error || null
   };
 }
 
@@ -451,7 +519,7 @@ function extractReviewFindingKeys(entry) {
   return keys;
 }
 
-class DialecticOrchestrator {
+class LoopiOrchestrator {
   constructor({ projectRoot } = {}) {
     this.projectRoot = taskPaths.getProjectRoot(projectRoot);
     this.sharedDir = taskPaths.sharedDir(this.projectRoot);
@@ -468,6 +536,7 @@ class DialecticOrchestrator {
     this.buildContextIndex = buildContextIndex;
     this.checkProviderReadiness = checkProviderReadiness;
     this.collectPlanAnswers = collectPlanAnswers;
+    this.captureWorktreeSnapshot = captureWorktreeSnapshot;
   }
 
   async init() {
@@ -571,19 +640,14 @@ class DialecticOrchestrator {
     const config = normalizeTaskConfig(rawTask, { projectRoot: this.projectRoot });
 
     const run = this.createRun(config);
+    this._artifactSeq = 0;
+    await this.captureAndPersistWorktreeSnapshot({ run, scope: 'run-start' });
+    await this.writeForkRecordIfPresent(run, config);
     const taskId = run.runId;
     let pendingError = null;
     let preflightComplete = false;
     try {
-      await this.collaborationStore.writeTask(taskId, {
-        taskId,
-        mode: run.mode,
-        prompt: run.prompt,
-        agents: run.agents,
-        settings: run.settings,
-        startedAt: run.startedAt,
-        status: run.status
-      });
+      await this.collaborationStore.writeTask(taskId, serializeTaskRecord(config, run, this.projectRoot));
     } catch (error) {
       console.error('Warning: failed to write v2 task record:', error.message);
     }
@@ -641,26 +705,11 @@ class DialecticOrchestrator {
       run.finishedAt = new Date().toISOString();
       run.durationMs = Date.parse(run.finishedAt) - Date.parse(run.startedAt);
       try {
-        await this.collaborationStore.writeTask(taskId, {
-          taskId,
-          mode: run.mode,
-          prompt: run.prompt,
-          agents: run.agents,
-          settings: run.settings,
-          startedAt: run.startedAt,
-          finishedAt: run.finishedAt,
-          durationMs: run.durationMs,
-          status: run.status,
-          error: run.error || null
-        });
+        await this.collaborationStore.writeTask(taskId, serializeTaskRecord(config, run, this.projectRoot));
       } catch (error) {
         console.error('Warning: failed to finalize v2 task record:', error.message);
       }
-      try {
-        await this.appendRunLog(run);
-      } catch (logError) {
-        console.error('Warning: failed to write run log:', logError.message);
-      }
+      await this.captureAndPersistWorktreeSnapshot({ run, scope: 'run-end' });
       if (config.settings.writeScratchpad) {
         try {
           await fs.writeFile(this.scratchpadFile, this.renderScratchpad(run), 'utf8');
@@ -668,6 +717,11 @@ class DialecticOrchestrator {
         } catch (scratchpadError) {
           console.error('Warning: failed to write scratchpad:', scratchpadError.message);
         }
+      }
+      try {
+        await this.appendRunLog(run);
+      } catch (logError) {
+        console.error('Warning: failed to write run log:', logError.message);
       }
     }
 
@@ -807,12 +861,123 @@ class DialecticOrchestrator {
     return `${prefix}-${this._artifactSeq}`;
   }
 
-  async writeArtifactSafe(runId, artifact, label) {
+  async writeArtifactSafe(runId, artifact, label, run = null) {
     try {
       await this.collaborationStore.writeArtifact(runId, artifact);
+      return { ok: true };
     } catch (error) {
-      console.error(`Warning: failed to write ${label} artifact:`, error.message);
+      const warning = `failed to write ${label} artifact: ${error.message}`;
+      console.error('Warning:', warning);
+      if (run && Array.isArray(run.auditWarnings)) {
+        run.auditWarnings.push(warning);
+      }
+      return { ok: false, error };
     }
+  }
+
+  async captureAndPersistWorktreeSnapshot({
+    run,
+    scope,
+    step = null,
+    cycleNumber = null
+  }) {
+    if (!run || !run.runId) {
+      return null;
+    }
+    try {
+      const snapshot = await Promise.resolve(this.captureWorktreeSnapshot({
+        projectRoot: this.projectRoot,
+        scope,
+        step,
+        includePatches: scope === 'pre-step' ? false : null
+      }));
+      if (scope === 'pre-step') {
+        snapshot.patchText = '';
+        snapshot.stagedPatchText = '';
+      }
+
+      const artifactId = this.nextArtifactId('worktree-snapshot');
+      const taskDir = taskPaths.taskDir(this.projectRoot, run.runId);
+      const patchesDir = taskPaths.patchesDir(this.projectRoot, run.runId);
+      let patchFile = null;
+      let stagedPatchFile = null;
+      let patchWriteError = null;
+
+      try {
+        await fs.mkdir(patchesDir, { recursive: true });
+        if (snapshot.patchText) {
+          const patchPath = taskPaths.patchFilePath(this.projectRoot, run.runId, artifactId);
+          await fs.writeFile(patchPath, snapshot.patchText, 'utf8');
+          patchFile = path.relative(taskDir, patchPath).replace(/\\/g, '/');
+        }
+        if (snapshot.stagedPatchText) {
+          const stagedPatchPath = taskPaths.patchFilePath(this.projectRoot, run.runId, artifactId, 'staged');
+          await fs.writeFile(stagedPatchPath, snapshot.stagedPatchText, 'utf8');
+          stagedPatchFile = path.relative(taskDir, stagedPatchPath).replace(/\\/g, '/');
+        }
+      } catch (error) {
+        patchWriteError = `Failed to persist patch files: ${error.message}`;
+      }
+
+      if (patchWriteError) {
+        snapshot.captureError = snapshot.captureError
+          ? `${snapshot.captureError} | ${patchWriteError}`
+          : patchWriteError;
+      }
+
+      const artifact = buildWorktreeSnapshotArtifact({
+        runId: run.runId,
+        artifactId,
+        cycleNumber,
+        snapshot,
+        patchFile,
+        stagedPatchFile
+      });
+      const writeResult = await this.writeArtifactSafe(run.runId, artifact, 'worktree-snapshot', run);
+      if (!writeResult.ok) {
+        return null;
+      }
+
+      const summary = {
+        artifactId,
+        scope: artifact.data.scope,
+        stepId: artifact.data.stepId,
+        stage: artifact.data.stage,
+        agent: artifact.data.agent,
+        cycleNumber: cycleNumber != null ? cycleNumber : null,
+        patchFile: artifact.data.patchFile,
+        stagedPatchFile: artifact.data.stagedPatchFile,
+        dirty: artifact.data.dirty,
+        capturedAt: artifact.createdAt
+      };
+      run.worktreeSnapshots.push(summary);
+      return summary;
+    } catch (error) {
+      console.error(`Warning: failed to capture ${scope} worktree snapshot:`, error.message);
+      return null;
+    }
+  }
+
+  async writeForkRecordIfPresent(run, config) {
+    if (!config || !config.fork || !run || !run.runId) {
+      return null;
+    }
+
+    const artifact = buildForkRecordArtifact({
+      runId: run.runId,
+      artifactId: this.nextArtifactId('fork-record'),
+      fork: config.fork
+    });
+    const writeResult = await this.writeArtifactSafe(run.runId, artifact, 'fork-record', run);
+    if (!writeResult.ok) {
+      return null;
+    }
+
+    run.forkRecord = {
+      artifactId: artifact.id,
+      ...artifact.data
+    };
+    return run.forkRecord;
   }
 
   async ensureContextIndex(config) {
@@ -893,7 +1058,6 @@ class DialecticOrchestrator {
     this._contextIndex = null;
     this._contextPackCache = {};
     this._contextSelectionArtifactKeys = new Set();
-    this._artifactSeq = 0;
     const acquiredLocks = [];
 
     try {
@@ -1925,9 +2089,25 @@ class DialecticOrchestrator {
     const stepIndex = Number.isInteger(run.nextStepIndex) && run.nextStepIndex >= 0
       ? run.nextStepIndex + 1
       : run.steps.length + 1;
+    const stepId = `${stage}-${stepIndex}`;
     run.nextStepIndex = stepIndex;
-    const writeLabel = executionPolicy && executionPolicy.canWrite ? ' (write-enabled)' : '';
+    const stepCanWrite = Boolean(executionPolicy && executionPolicy.canWrite);
+    const writeLabel = stepCanWrite ? ' (write-enabled)' : '';
     console.log(`Running ${agent} for ${stage}${writeLabel}`);
+
+    const preStepSnapshot = stepCanWrite
+      ? await this.captureAndPersistWorktreeSnapshot({
+        run,
+        scope: 'pre-step',
+        step: {
+          id: stepId,
+          stage,
+          agent,
+          canWrite: true
+        },
+        cycleNumber
+      })
+      : null;
 
     const promptReadyAt = Date.now();
     const agentOpts = config.settings.agentOptions && config.settings.agentOptions[agent];
@@ -1983,7 +2163,7 @@ class DialecticOrchestrator {
       totalMs: parseFinishedAt - promptReadyAt
     };
     const step = {
-      id: `${stage}-${stepIndex}`,
+      id: stepId,
       stage,
       agent,
       ok: result.ok,
@@ -2006,7 +2186,7 @@ class DialecticOrchestrator {
       handoffData: handoff.handoffData,
       handoffText: handoff.handoffText,
       handoffParseError: handoff.handoffParseError,
-      canWrite: Boolean(executionPolicy && executionPolicy.canWrite),
+      canWrite: stepCanWrite,
       cycleNumber,
       timing,
       warnings: stepWarnings,
@@ -2028,6 +2208,17 @@ class DialecticOrchestrator {
     }
 
     run.steps.push(step);
+    let worktreeAfterSnapshot = null;
+    if (step.canWrite) {
+      worktreeAfterSnapshot = await this.captureAndPersistWorktreeSnapshot({
+        run,
+        scope: 'post-step',
+        step,
+        cycleNumber: step.cycleNumber
+      });
+      step.worktreeBeforeSnapshot = preStepSnapshot;
+      step.worktreeAfterSnapshot = worktreeAfterSnapshot;
+    }
 
     try {
       await this.collaborationStore.appendStep(run.runId, {
@@ -2052,7 +2243,15 @@ class DialecticOrchestrator {
         timing: step.timing || null,
         warnings: step.warnings || [],
         capabilityDowngrades: step.capabilityDowngrades || null,
-        fallbackFromRole: step.fallbackFromRole || null
+        fallbackFromRole: step.fallbackFromRole || null,
+        worktreeBeforeSnapshotArtifactId: preStepSnapshot ? preStepSnapshot.artifactId : null,
+        worktreeBeforeSnapshotPatchFile: preStepSnapshot ? preStepSnapshot.patchFile || null : null,
+        worktreeBeforeSnapshotStagedPatchFile: preStepSnapshot ? preStepSnapshot.stagedPatchFile || null : null,
+        worktreeBeforeSnapshotDirty: preStepSnapshot ? Boolean(preStepSnapshot.dirty) : null,
+        worktreeAfterSnapshotArtifactId: worktreeAfterSnapshot ? worktreeAfterSnapshot.artifactId : null,
+        worktreeAfterSnapshotPatchFile: worktreeAfterSnapshot ? worktreeAfterSnapshot.patchFile || null : null,
+        worktreeAfterSnapshotStagedPatchFile: worktreeAfterSnapshot ? worktreeAfterSnapshot.stagedPatchFile || null : null,
+        worktreeAfterSnapshotDirty: worktreeAfterSnapshot ? Boolean(worktreeAfterSnapshot.dirty) : null
       });
     } catch (error) {
       console.error('Warning: failed to append v2 step record:', error.message);
@@ -2154,6 +2353,7 @@ class DialecticOrchestrator {
       runId: `run-${startedAt.replace(/[:.]/g, '-')}`,
       mode: config.mode,
       prompt: config.prompt,
+      fork: config.fork || null,
       agents: config.agents,
       nextStepIndex: 0,
       settings: config.settings,
@@ -2162,6 +2362,9 @@ class DialecticOrchestrator {
       durationMs: null,
       status: 'running',
       steps: [],
+      worktreeSnapshots: [],
+      forkRecord: null,
+      auditWarnings: [],
       result: null,
       error: null
     };
@@ -2178,6 +2381,62 @@ class DialecticOrchestrator {
       run.prompt,
       ''
     ];
+
+    if (run.forkRecord) {
+      lines.push('## FORK LINEAGE');
+      lines.push(`Artifact: ${run.forkRecord.artifactId}`);
+      lines.push(`Forked From Run: ${run.forkRecord.forkedFromRunId}`);
+      if (run.forkRecord.forkedFromStepId) {
+        lines.push(`Forked From Step: ${run.forkRecord.forkedFromStepId}`);
+      }
+      if (run.forkRecord.baseCommit) {
+        lines.push(`Base Commit: ${run.forkRecord.baseCommit}`);
+      }
+      if (run.forkRecord.reason) {
+        lines.push(`Reason: ${run.forkRecord.reason}`);
+      }
+      lines.push(`Recorded By: ${run.forkRecord.recordedBy || 'manual'}`);
+      lines.push('');
+    }
+
+    if (Array.isArray(run.auditWarnings) && run.auditWarnings.length > 0) {
+      lines.push('## AUDIT WARNINGS');
+      for (const warning of run.auditWarnings) {
+        lines.push(`- ${warning}`);
+      }
+      lines.push('');
+    }
+
+    if (Array.isArray(run.worktreeSnapshots) && run.worktreeSnapshots.length > 0) {
+      lines.push('## WORKTREE SNAPSHOTS');
+      for (const snapshot of run.worktreeSnapshots) {
+        const parts = [
+          `Scope: ${snapshot.scope || 'unknown'}`,
+          `Captured: ${snapshot.capturedAt || 'unknown'}`,
+          `Dirty: ${snapshot.dirty ? 'yes' : 'no'}`
+        ];
+        if (snapshot.stepId) {
+          parts.push(`Step: ${snapshot.stepId}`);
+        }
+        if (snapshot.stage) {
+          parts.push(`Stage: ${snapshot.stage}`);
+        }
+        if (snapshot.agent) {
+          parts.push(`Agent: ${snapshot.agent}`);
+        }
+        if (snapshot.cycleNumber !== null && snapshot.cycleNumber !== undefined) {
+          parts.push(`Cycle: ${snapshot.cycleNumber}`);
+        }
+        if (snapshot.patchFile) {
+          parts.push(`Patch: ${snapshot.patchFile}`);
+        }
+        if (snapshot.stagedPatchFile) {
+          parts.push(`Staged Patch: ${snapshot.stagedPatchFile}`);
+        }
+        lines.push(parts.join(' | '));
+      }
+      lines.push('');
+    }
 
     let lastCycleNumber = null;
     for (const step of run.steps) {
@@ -2220,6 +2479,15 @@ class DialecticOrchestrator {
       }
       if (step.usedFallback && step.capabilityDowngrades && step.capabilityDowngrades.length > 0) {
         lines.push(`Fallback Downgrades: ${step.capabilityDowngrades.join(', ')}`);
+      }
+      if (step.worktreeBeforeSnapshot) {
+        lines.push(`Worktree Before Snapshot: ${step.worktreeBeforeSnapshot.artifactId}`);
+      }
+      if (step.worktreeAfterSnapshot) {
+        lines.push(`Worktree After Snapshot: ${step.worktreeAfterSnapshot.artifactId}`);
+        if (step.worktreeAfterSnapshot.patchFile) {
+          lines.push(`Worktree After Patch: ${step.worktreeAfterSnapshot.patchFile}`);
+        }
       }
       lines.push('');
 
@@ -2271,8 +2539,8 @@ class DialecticOrchestrator {
 }
 
 async function main() {
-  const orchestrator = new DialecticOrchestrator({
-    projectRoot: process.env.DIALECTIC_PROJECT_ROOT
+  const orchestrator = new LoopiOrchestrator({
+    projectRoot: process.env.LOOPI_PROJECT_ROOT
   });
   await orchestrator.init();
   await orchestrator.runTask();
@@ -2286,7 +2554,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  DialecticOrchestrator,
+  LoopiOrchestrator,
   validateProviderAssignments,
   __test: {
     getProviderConfig,
@@ -2301,6 +2569,8 @@ module.exports = {
     buildProviderReadinessArtifact,
     buildProviderExecutionArtifact,
     buildContextSelectionArtifact,
-    buildPlanClarificationsArtifact
+    buildPlanClarificationsArtifact,
+    buildWorktreeSnapshotArtifact,
+    buildForkRecordArtifact
   }
 };

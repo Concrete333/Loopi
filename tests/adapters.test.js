@@ -476,7 +476,7 @@ function testOpencodePlanInvocation() {
 }
 
 function testOpencodeImplementInvocation() {
-  // Opencode is read-only in Dialectic V1 — implement also uses --agent plan.
+  // Opencode is read-only in Loopi V1 — implement also uses --agent plan.
   const invocation = adapterTest.buildOpencodeInvocation('opencode', {
     cwd: '/repo',
     timeoutMs: 10000,

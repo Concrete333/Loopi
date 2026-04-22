@@ -2369,7 +2369,7 @@ function resolveFile(label, candidates) {
   const detail = attempted.length > 0
     ? ` Tried: ${attempted.join(', ')}.`
     : '';
-  throw new Error(`Could not resolve ${label}. Set the matching DIALECTIC_* path override.${detail}`);
+  throw new Error(`Could not resolve ${label}. Set the matching LOOPI_* path override.${detail}`);
 }
 
 function resolveFromPath(commandName) {
@@ -2522,7 +2522,7 @@ const adapters = {
   claude: {
     resolve() {
       return resolveFile('Claude executable', [
-        process.env.DIALECTIC_CLAUDE_PATH,
+        process.env.LOOPI_CLAUDE_PATH,
         path.join(os.homedir(), '.local', 'bin', 'claude.exe'),
         resolveFromPath('claude.exe'),
         resolveFromPath('claude')
@@ -2546,7 +2546,7 @@ const adapters = {
   codex: {
     resolve() {
       return resolveFile('Codex entrypoint', [
-        process.env.DIALECTIC_CODEX_JS,
+        process.env.LOOPI_CODEX_JS,
         ...npmGlobalNodeModulePaths('@openai', 'codex', 'bin', 'codex.js'),
         resolveFromPath('codex')
       ]);
@@ -2573,7 +2573,7 @@ const adapters = {
   gemini: {
     resolve() {
       return resolveFile('Gemini entrypoint', [
-        process.env.DIALECTIC_GEMINI_JS,
+        process.env.LOOPI_GEMINI_JS,
         ...npmGlobalNodeModulePaths('@google', 'gemini-cli', 'dist', 'index.js'),
         resolveFromPath('gemini')
       ]);
@@ -2596,7 +2596,7 @@ const adapters = {
   kilo: {
     resolve() {
       const candidates = [
-        process.env.DIALECTIC_KILO_PATH,
+        process.env.LOOPI_KILO_PATH,
         ...npmGlobalNodeModulePaths('@kilocode', 'cli', 'node_modules', '@kilocode', 'cli-windows-x64', 'bin', 'kilo.exe'),
         ...npmGlobalNodeModulePaths('@kilocode', 'cli', 'node_modules', '@kilocode', 'cli-windows-x64-baseline', 'bin', 'kilo.exe'),
       ];
@@ -2637,7 +2637,7 @@ const adapters = {
   qwen: {
     resolve() {
       return resolveFile('Qwen entrypoint', [
-        process.env.DIALECTIC_QWEN_JS,
+        process.env.LOOPI_QWEN_JS,
         ...npmGlobalNodeModulePaths('@qwen-code', 'qwen-code', 'cli.js'),
         resolveFromPath('qwen')
       ]);
@@ -2660,7 +2660,7 @@ const adapters = {
   opencode: {
     resolve() {
       const candidates = [
-        process.env.DIALECTIC_OPENCODE_PATH,
+        process.env.LOOPI_OPENCODE_PATH,
         resolveFromPath('opencode')
       ];
       if (process.platform === 'win32') {

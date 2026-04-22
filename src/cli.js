@@ -7,7 +7,7 @@ async function runCli(argv, deps = {}) {
   const args = Array.isArray(argv) ? argv : [];
   const command = args[0] || 'help';
   return runCommand(command, {
-    projectRoot: deps.projectRoot || process.env.DIALECTIC_PROJECT_ROOT || taskPaths.getProjectRoot(),
+    projectRoot: deps.projectRoot || process.env.LOOPI_PROJECT_ROOT || taskPaths.getProjectRoot(),
     ...deps,
     args: args.slice(1)
   });

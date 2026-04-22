@@ -1,6 +1,6 @@
 const {
   assert,
-  DialecticOrchestrator,
+  LoopiOrchestrator,
   createConfig,
   createRun
 } = require('../orchestrator-test-helpers');
@@ -9,12 +9,12 @@ module.exports = async function registerOneShotTests(test) {
   console.log('orchestrator: one-shot unit-by-unit implement');
 
   await test('runOneShotUnitImplement exists and is a function', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     assert.strictEqual(typeof orchestrator.runOneShotUnitImplement, 'function');
   });
 
   await test('runOneShotUnitImplement fails fast when handoffData is missing', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 2 } });
     const run = createRun(config);
 
@@ -30,7 +30,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotUnitImplement fails fast when units are empty', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 2 } });
     const run = createRun(config);
 
@@ -46,7 +46,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotUnitImplement fails fast when units array is missing', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 2 } });
     const run = createRun(config);
 
@@ -62,7 +62,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotUnitImplement executes units in order with correct context', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       agents: ['claude', 'codex'],
       settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 1 }
@@ -119,7 +119,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotUnitImplement stops on unit failure', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       agents: ['claude', 'codex'],
       settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 1 }
@@ -188,7 +188,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotUnitImplement uses implementLoopsPerUnit for loop count', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       agents: ['claude', 'codex'],
       settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 3 }
@@ -233,7 +233,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotMode calls runOneShotUnitImplement', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
       useCase: 'coding',
@@ -285,7 +285,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotMode preserves handoffData across quality loops', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
       useCase: 'coding',
@@ -337,7 +337,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotUnitImplement uses effectiveAgents override', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
       agents: ['claude', 'codex', 'gemini'],
@@ -393,7 +393,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotMode uses rendered plan text not handoff JSON', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
       useCase: 'coding',
@@ -441,7 +441,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotUnitImplement fails when unit_kind is missing', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
       agents: ['claude', 'codex'],
@@ -468,7 +468,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotMode passes implement origin override into unit implement', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
       useCase: 'coding',
@@ -524,7 +524,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotMode falls back to rendered handoff when finalOutput is empty', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
       useCase: 'coding',
@@ -573,7 +573,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotUnitImplement uses implement-unit handoff schema', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
       useCase: 'coding',
@@ -623,7 +623,7 @@ module.exports = async function registerOneShotTests(test) {
   });
 
   await test('runOneShotMode fails clearly when useCase is missing', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
       settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1, implementLoopsPerUnit: 1 }

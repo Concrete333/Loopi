@@ -6,7 +6,7 @@ const { spawnSync } = require('child_process');
 const { runCli } = require('../src/cli');
 const { buildHelpText } = require('../src/cli-commands');
 const { runBeginnerWizard, runAdvancedWizard, resolveWizardMode } = require('../src/cli-wizard');
-const { DialecticOrchestrator } = require('../src/orchestrator');
+const { LoopiOrchestrator } = require('../src/orchestrator');
 const taskPaths = require('../src/task-paths');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -87,7 +87,7 @@ function runCliProcess(args, {
     cwd: PROJECT_ROOT,
     env: {
       ...process.env,
-      DIALECTIC_PROJECT_ROOT: projectRoot
+      LOOPI_PROJECT_ROOT: projectRoot
     },
     input,
     encoding: 'utf8'
@@ -108,7 +108,7 @@ function runCliPipedProcess(args, {
 } = {}) {
   const env = {
     ...process.env,
-    DIALECTIC_PROJECT_ROOT: projectRoot
+    LOOPI_PROJECT_ROOT: projectRoot
   };
   const timeout = 15000;
 
@@ -191,8 +191,159 @@ test('help text includes the beginner wizard commands', async () => {
   assert.match(stdout.read(), /review\s+Interactive review-mode wizard/);
   assert.match(stdout.read(), /implement\s+Interactive implement-mode wizard/);
   assert.match(stdout.read(), /oneshot\s+Interactive one-shot wizard/);
+  assert.match(stdout.read(), /fork\s+Create a forked shared\/task\.json from a prior run/);
+  assert.match(stdout.read(), /compare\s+Compare two prior runs using recorded snapshots/);
   assert.match(stdout.read(), /doctor\s+Check the current task file and selected agents/);
   assert.match(stdout.read(), /new\s+Start the opt-in advanced wizard/);
+});
+
+test('fork command delegates to fork helper and prints run hint', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+  const calls = [];
+
+  const exitCode = await runCli(['fork', 'run-001', 'implement-2', '--reason', 'Retry it'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr,
+    createForkTask: async (options) => {
+      calls.push(options);
+      return {
+        taskFile: path.join(PROJECT_ROOT, 'shared', 'task.json'),
+        sourceRunId: options.sourceRunId,
+        sourceStepId: options.sourceStepId,
+        baseCommit: 'abc123'
+      };
+    }
+  });
+
+  assert.strictEqual(exitCode, 0);
+  assert.strictEqual(stderr.read(), '');
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].sourceRunId, 'run-001');
+  assert.strictEqual(calls[0].sourceStepId, 'implement-2');
+  assert.strictEqual(calls[0].reason, 'Retry it');
+  assert.match(stdout.read(), /Forked task written to/);
+  assert.match(stdout.read(), /Source run: run-001/);
+  assert.match(stdout.read(), /Run it with: npm run cli -- run/);
+});
+
+test('fork command can run immediately after creating the task', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+  const calls = [];
+
+  const exitCode = await runCli(['fork', 'run-001', '--run'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr,
+    stat: async () => ({ isFile: () => true }),
+    createForkTask: async () => ({
+      taskFile: path.join(PROJECT_ROOT, 'shared', 'task.json'),
+      sourceRunId: 'run-001',
+      sourceStepId: null,
+      baseCommit: null
+    }),
+    createOrchestrator: async () => ({
+      async init() {
+        calls.push('init');
+      },
+      async runTask() {
+        calls.push('runTask');
+      }
+    })
+  });
+
+  assert.strictEqual(exitCode, 0);
+  assert.strictEqual(stderr.read(), '');
+  assert.deepStrictEqual(calls, ['init', 'runTask']);
+  assert.match(stdout.read(), /Task written\. Starting run\.\.\./);
+});
+
+test('fork command rejects missing run id', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+
+  const exitCode = await runCli(['fork'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr
+  });
+
+  assert.strictEqual(exitCode, 1);
+  assert.strictEqual(stdout.read(), '');
+  assert.match(stderr.read(), /Usage: npm run cli -- fork <runId>/);
+});
+
+test('fork command rejects unknown flags', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+
+  const exitCode = await runCli(['fork', 'run-001', '--bogus'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr
+  });
+
+  assert.strictEqual(exitCode, 1);
+  assert.strictEqual(stdout.read(), '');
+  assert.match(stderr.read(), /Usage: npm run cli -- fork <runId>/);
+});
+
+test('fork command rejects extra positional arguments', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+
+  const exitCode = await runCli(['fork', 'run-001', 'implement-1', 'extra-positional'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr
+  });
+
+  assert.strictEqual(exitCode, 1);
+  assert.strictEqual(stdout.read(), '');
+  assert.match(stderr.read(), /Usage: npm run cli -- fork <runId>/);
+});
+
+test('compare command delegates to compare helper and prints the returned lines', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+  const calls = [];
+
+  const exitCode = await runCli(['compare', 'run-a', 'run-b'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr,
+    compareRunsHelper: async (options) => {
+      calls.push(options);
+      return {
+        lines: ['Comparing runs: run-a vs run-b', 'Run A patch: shared/tasks/run-a/patches/a.patch']
+      };
+    }
+  });
+
+  assert.strictEqual(exitCode, 0);
+  assert.strictEqual(stderr.read(), '');
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].leftRunId, 'run-a');
+  assert.strictEqual(calls[0].rightRunId, 'run-b');
+  assert.match(stdout.read(), /Comparing runs: run-a vs run-b/);
+  assert.match(stdout.read(), /Run A patch: shared\/tasks\/run-a\/patches\/a\.patch/);
+});
+
+test('compare command rejects missing run ids', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+
+  const exitCode = await runCli(['compare', 'run-a'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr
+  });
+
+  assert.strictEqual(exitCode, 1);
+  assert.strictEqual(stdout.read(), '');
+  assert.match(stderr.read(), /Usage: npm run cli -- compare <runIdA> <runIdB>/);
 });
 
 test('open command prints path and helpful message when scratchpad is missing', async () => {
@@ -291,7 +442,7 @@ test('run command reports a missing task file and does not invoke the orchestrat
 
 test('orchestrator constructor honors an injected projectRoot', async () => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-orchestrator-root-'));
-  const orchestrator = new DialecticOrchestrator({ projectRoot });
+  const orchestrator = new LoopiOrchestrator({ projectRoot });
 
   assert.strictEqual(orchestrator.projectRoot, projectRoot);
   assert.strictEqual(orchestrator.taskFile, taskPaths.legacyTaskFile(projectRoot));

@@ -1,5 +1,5 @@
 const path = require('path');
-const { DialecticOrchestrator } = require('../src/orchestrator');
+const { LoopiOrchestrator } = require('../src/orchestrator');
 const { normalizeTaskConfig } = require('../src/task-config');
 const { getModePromptBuilders } = require('../src/prompts');
 
@@ -93,7 +93,7 @@ function formatRow({ stage, delivery, promptChars }) {
 
 async function measureScenario(reviewParallelDelivery) {
   const config = buildConfig(reviewParallelDelivery);
-  const orchestrator = new DialecticOrchestrator();
+  const orchestrator = new LoopiOrchestrator();
   const modeBuilders = getModePromptBuilders('review');
   orchestrator._contextIndex = createSyntheticContextIndex();
 
@@ -118,8 +118,8 @@ async function measureScenario(reviewParallelDelivery) {
   }));
 
   const metrics = [];
-  const originalSilent = process.env.DIALECTIC_SILENT;
-  process.env.DIALECTIC_SILENT = '1';
+  const originalSilent = process.env.LOOPI_SILENT;
+  process.env.LOOPI_SILENT = '1';
 
   try {
     const initialDelivery = config.context.deliveryPolicy.reviewInitial;
@@ -183,9 +183,9 @@ async function measureScenario(reviewParallelDelivery) {
     });
   } finally {
     if (originalSilent === undefined) {
-      delete process.env.DIALECTIC_SILENT;
+      delete process.env.LOOPI_SILENT;
     } else {
-      process.env.DIALECTIC_SILENT = originalSilent;
+      process.env.LOOPI_SILENT = originalSilent;
     }
   }
 

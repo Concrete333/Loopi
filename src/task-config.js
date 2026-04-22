@@ -29,6 +29,7 @@ function normalizeTaskConfig(rawTask, { projectRoot }) {
   const customPrompts = normalizeCustomPrompts(rawTask, mode);
   const useCase = normalizeUseCase(rawTask, mode, projectRoot);
   const context = normalizeContext(rawTask, projectRoot);
+  const fork = normalizeFork(rawTask);
 
   const planQuestionMode = normalizePlanQuestionMode(rawTask);
 
@@ -46,6 +47,7 @@ function normalizeTaskConfig(rawTask, { projectRoot }) {
     synthesisPrompt: customPrompts.synthesisPrompt,
     customImplementPrompt: customPrompts.customImplementPrompt,
     useCase,
+    fork,
     agents,
     executionTargets,
     providers,
@@ -65,6 +67,40 @@ function normalizeTaskConfig(rawTask, { projectRoot }) {
       oneShotOrigins
     }
   };
+}
+
+function normalizeFork(rawTask) {
+  const rawFork = rawTask.fork;
+
+  if (rawFork === undefined || rawFork === null) {
+    return null;
+  }
+
+  if (typeof rawFork !== 'object' || Array.isArray(rawFork)) {
+    throw new Error('"fork" must be an object when provided.');
+  }
+
+  if (typeof rawFork.forkedFromRunId !== 'string' || rawFork.forkedFromRunId.trim() === '') {
+    throw new Error('fork.forkedFromRunId must be a non-empty string.');
+  }
+
+  return {
+    forkedFromRunId: rawFork.forkedFromRunId.trim(),
+    forkedFromStepId: normalizeOptionalForkString(rawFork.forkedFromStepId, 'fork.forkedFromStepId'),
+    baseCommit: normalizeOptionalForkString(rawFork.baseCommit, 'fork.baseCommit'),
+    reason: normalizeOptionalForkString(rawFork.reason, 'fork.reason'),
+    recordedBy: normalizeOptionalForkString(rawFork.recordedBy, 'fork.recordedBy') || 'manual'
+  };
+}
+
+function normalizeOptionalForkString(value, label) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`${label} must be a non-empty string when provided.`);
+  }
+  return value.trim();
 }
 
 function normalizeRoles(rawTask, providers = {}) {

@@ -4,7 +4,7 @@ const { resolveContextDelivery, resolveContextDeliveryForCycle } = require('../.
 const {
   assert,
   PROJECT_ROOT,
-  DialecticOrchestrator,
+  LoopiOrchestrator,
   normalizeTaskConfig
 } = require('../orchestrator-test-helpers');
 const { startSequentialMockHttpServer } = require('./http-helpers');
@@ -13,7 +13,7 @@ module.exports = async function registerCachingAndE2ETests(test) {
   console.log('\norchestrator: Commit 17 - Run-level caching');
 
   await test('checkProviderReadiness is only called once per provider per run', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',
@@ -50,7 +50,7 @@ module.exports = async function registerCachingAndE2ETests(test) {
   });
 
   await test('Cached readiness reuse does not write duplicate provider-readiness artifacts', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const artifacts = [];
     const config = normalizeTaskConfig({
       mode: 'plan',
@@ -87,7 +87,7 @@ module.exports = async function registerCachingAndE2ETests(test) {
   });
 
   await test('ensureProviderReadiness checks only providers used by this run', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'review',
       prompt: 'Test prompt',
@@ -128,7 +128,7 @@ module.exports = async function registerCachingAndE2ETests(test) {
   });
 
   await test('buildContextIndex is called exactly once per run when context is configured', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',
@@ -162,7 +162,7 @@ module.exports = async function registerCachingAndE2ETests(test) {
   });
 
   await test('Default stage context policy preserves current full vs digest behavior', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const captured = [];
 
     const planConfig = normalizeTaskConfig({
@@ -401,7 +401,7 @@ module.exports = async function registerCachingAndE2ETests(test) {
   });
 
   await test('Context deliveryPolicy can suppress or downgrade context by stage', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const captured = [];
 
     const config = normalizeTaskConfig({
@@ -480,7 +480,7 @@ module.exports = async function registerCachingAndE2ETests(test) {
   });
 
   await test('Later review-mode cycles downgrade default reviewParallel prompts to context digests', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const captured = [];
     const logs = [];
 
@@ -563,7 +563,7 @@ module.exports = async function registerCachingAndE2ETests(test) {
   });
 
   await test('Digest prompt context carries provider render cap when maxInputChars is set', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',
@@ -608,7 +608,7 @@ module.exports = async function registerCachingAndE2ETests(test) {
   console.log('\norchestrator: Commit 20 - End-to-end coverage');
 
   await test('Run with both HTTP provider and context folder configured works end-to-end and records artifacts in order', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const artifacts = [];
     const initialPlanContent = [
       '1. Goal',

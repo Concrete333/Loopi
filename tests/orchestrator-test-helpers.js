@@ -1,6 +1,6 @@
 const assert = require('assert');
 const path = require('path');
-const { DialecticOrchestrator } = require('../src/orchestrator');
+const { LoopiOrchestrator } = require('../src/orchestrator');
 const { normalizeTaskConfig } = require('../src/task-config');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -56,14 +56,15 @@ function createRun(config) {
     agents: config.agents,
     settings: config.settings,
     startedAt: new Date().toISOString(),
-    steps: []
+    steps: [],
+    worktreeSnapshots: []
   };
 }
 
 module.exports = {
   assert,
   PROJECT_ROOT,
-  DialecticOrchestrator,
+  LoopiOrchestrator,
   normalizeTaskConfig,
   createTestHarness,
   createConfig,

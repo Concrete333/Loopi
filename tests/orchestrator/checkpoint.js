@@ -1,7 +1,7 @@
 const {
   assert,
   PROJECT_ROOT,
-  DialecticOrchestrator,
+  LoopiOrchestrator,
   normalizeTaskConfig
 } = require('../orchestrator-test-helpers');
 
@@ -9,7 +9,7 @@ module.exports = async function registerCheckpointTests(test) {
   console.log('\norchestrator: Commit 12 - Interactive planning checkpoint');
 
   await test('interactive mode pauses after first draft and before review', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',
@@ -141,7 +141,7 @@ module.exports = async function registerCheckpointTests(test) {
   });
 
   await test('autonomous mode does not pause and uses defaults', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',
@@ -260,7 +260,7 @@ module.exports = async function registerCheckpointTests(test) {
   });
 
   await test('no questions means no pause', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',
@@ -329,7 +329,7 @@ module.exports = async function registerCheckpointTests(test) {
   });
 
   await test('malformed question handoff warns and continues', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',
@@ -400,7 +400,7 @@ module.exports = async function registerCheckpointTests(test) {
   });
 
   await test('clarifications remain present in later quality loops', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = normalizeTaskConfig({
       mode: 'plan',
       prompt: 'Test prompt',

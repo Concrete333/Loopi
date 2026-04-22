@@ -1,28 +1,33 @@
 const fs = require('fs').promises;
 const taskPaths = require('./task-paths');
-const { DialecticOrchestrator } = require('./orchestrator');
+const { LoopiOrchestrator } = require('./orchestrator');
 const { runBeginnerWizard, runAdvancedWizard } = require('./cli-wizard');
 const { listPresets, savePreset, usePreset } = require('./cli-presets');
 const { runDoctorCheck } = require('./cli-doctor');
+const { createForkTaskFromRun, compareRuns } = require('./cli-audit');
 
 function buildHelpText() {
   return [
-    'Dialectic CLI',
+    'Loopi CLI',
     '',
     'Usage:',
     '  npm run cli -- <command>',
     '  npm run cli -- new --advanced',
     '  npm run cli -- preset <save|list|use> [name]',
+    '  npm run cli -- fork <runId> [stepId] [--reason "text"] [--run]',
+    '  npm run cli -- compare <runIdA> <runIdB>',
     '',
     'Available commands:',
     '  help        Show this help text',
-    '  run         Run the current shared/task.json through Dialectic',
+    '  run         Run the current shared/task.json through Loopi',
     '  open        Show the scratchpad path and print its contents if present',
     '  plan        Interactive plan-mode wizard',
     '  review      Interactive review-mode wizard',
     '  implement   Interactive implement-mode wizard',
     '  oneshot     Interactive one-shot wizard',
     '  preset      Save, list, or use named task presets',
+    '  fork        Create a forked shared/task.json from a prior run',
+    '  compare     Compare two prior runs using recorded snapshots',
     '  doctor      Check the current task file and selected agents',
     '  new         Start the opt-in advanced wizard',
     ''
@@ -198,6 +203,122 @@ async function runDoctorCommand({
   return result.ok ? 0 : 1;
 }
 
+function parseForkArgs(args) {
+  const usage = 'Usage: npm run cli -- fork <runId> [stepId] [--reason "text"] [--run]';
+  const positionals = [];
+  let reason = null;
+  let runNow = false;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = String(args[i] || '').trim();
+    if (!arg) {
+      continue;
+    }
+
+    if (arg === '--run') {
+      runNow = true;
+      continue;
+    }
+
+    if (arg === '--reason') {
+      const nextValue = args[i + 1];
+      if (typeof nextValue !== 'string' || nextValue.trim() === '') {
+        throw new Error(usage);
+      }
+      reason = nextValue.trim();
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith('-')) {
+      throw new Error(usage);
+    }
+
+    positionals.push(arg);
+    if (positionals.length > 2) {
+      throw new Error(usage);
+    }
+  }
+
+  if (positionals.length < 1 || !positionals[0]) {
+    throw new Error(usage);
+  }
+
+  return {
+    sourceRunId: positionals[0],
+    sourceStepId: positionals[1] || null,
+    reason,
+    runNow
+  };
+}
+
+async function runForkCommand(args, {
+  projectRoot,
+  stdout,
+  stderr,
+  stat = fs.stat,
+  createOrchestrator,
+  createForkTask = createForkTaskFromRun
+}) {
+  let parsed;
+  try {
+    parsed = parseForkArgs(args);
+  } catch (error) {
+    writeLine(stderr, error.message);
+    return 1;
+  }
+
+  const result = await createForkTask({
+    projectRoot,
+    sourceRunId: parsed.sourceRunId,
+    sourceStepId: parsed.sourceStepId,
+    reason: parsed.reason
+  });
+
+  writeLine(stdout, `Forked task written to ${result.taskFile}`);
+  writeLine(stdout, `Source run: ${result.sourceRunId}`);
+  if (result.sourceStepId) {
+    writeLine(stdout, `Source step: ${result.sourceStepId}`);
+  }
+  if (result.baseCommit) {
+    writeLine(stdout, `Base commit: ${result.baseCommit}`);
+  }
+
+  if (parsed.runNow) {
+    writeLine(stdout, 'Task written. Starting run...');
+    return runCurrentTask({ projectRoot, createOrchestrator, stat, stderr });
+  }
+
+  writeLine(stdout, 'Run it with: npm run cli -- run');
+  return 0;
+}
+
+async function runCompareCommand(args, {
+  projectRoot,
+  stdout,
+  stderr,
+  compareRunsHelper = compareRuns
+}) {
+  const leftRunId = args[0] ? String(args[0]).trim() : '';
+  const rightRunId = args[1] ? String(args[1]).trim() : '';
+
+  if (!leftRunId || !rightRunId) {
+    writeLine(stderr, 'Usage: npm run cli -- compare <runIdA> <runIdB>');
+    return 1;
+  }
+
+  const result = await compareRunsHelper({
+    projectRoot,
+    leftRunId,
+    rightRunId
+  });
+
+  for (const line of result.lines) {
+    writeLine(stdout, line);
+  }
+  return 0;
+}
+
 async function runCommand(command, {
   projectRoot = taskPaths.getProjectRoot(),
   stdout = process.stdout,
@@ -205,13 +326,15 @@ async function runCommand(command, {
   args = [],
   readFile = fs.readFile,
   stat = fs.stat,
-  createOrchestrator = async (root) => new DialecticOrchestrator({ projectRoot: root }),
+  createOrchestrator = async (root) => new LoopiOrchestrator({ projectRoot: root }),
   runWizard = runBeginnerWizard,
   runAdvanced = runAdvancedWizard,
   listPresetEntries = listPresets,
   savePresetFile = savePreset,
   usePresetFile = usePreset,
-  runDoctor = runDoctorCheck
+  runDoctor = runDoctorCheck,
+  createForkTask = createForkTaskFromRun,
+  compareRunsHelper = compareRuns
 } = {}) {
   const normalizedCommand = typeof command === 'string' && command.trim() !== ''
     ? command.trim().toLowerCase()
@@ -246,6 +369,26 @@ async function runCommand(command, {
       projectRoot,
       stdout,
       runDoctor
+    });
+  }
+
+  if (normalizedCommand === 'fork') {
+    return runForkCommand(args, {
+      projectRoot,
+      stdout,
+      stderr,
+      stat,
+      createOrchestrator,
+      createForkTask
+    });
+  }
+
+  if (normalizedCommand === 'compare') {
+    return runCompareCommand(args, {
+      projectRoot,
+      stdout,
+      stderr,
+      compareRunsHelper
     });
   }
 

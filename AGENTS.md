@@ -1,10 +1,10 @@
-# Dialectic - Public Agent Guide
+# Loopi - Public Agent Guide
 
-This file helps AI agents understand the public Dialectic codebase quickly.
+This file helps AI agents understand the public Loopi codebase quickly.
 
 ## What this project is
 
-Dialectic is a Node.js orchestration runtime for structured AI coding workflows.
+Loopi is a Node.js orchestration runtime for structured AI coding workflows.
 
 It coordinates multiple coding-agent CLIs and OpenAI-compatible HTTP providers through explicit modes such as:
 
@@ -28,7 +28,7 @@ The normal path is:
 
 ## Mental model
 
-Dialectic is best understood as a workflow layer above individual coding agents.
+Loopi is best understood as a workflow layer above individual coding agents.
 
 It adds:
 
@@ -57,13 +57,24 @@ It adds:
 
 ## Important runtime artifacts
 
-Dialectic writes runtime state to:
+Loopi writes runtime state to:
 
 - `shared/scratchpad.txt`
 - `shared/log.json`
-- `shared/tasks/<runId>/...`
+- `shared/runs.ndjson`
+- `shared/tasks/<runId>/task.json`
+- `shared/tasks/<runId>/steps.ndjson`
+- `shared/tasks/<runId>/artifacts/*.json`
+- `shared/tasks/<runId>/patches/*.patch`
 
 These files matter when understanding what happened in a run.
+
+Important audit-trail note:
+
+- `worktree-snapshot` artifacts describe run-start, pre-step, post-write-step, and run-end worktree state
+- `patches/*.patch` contains the captured diff text referenced by those artifacts
+- `fork-record` artifacts capture manual lineage when a task is explicitly forked from an earlier run or step
+- `shared/scratchpad.txt` is the quickest human-readable way to discover those files
 
 ## Execution modes
 
@@ -100,6 +111,6 @@ If you need to understand the project quickly, start here:
 
 ## What this file is not
 
-This is not the internal development guide for building, packaging, or publishing Dialectic.
+This is not the internal development guide for building, packaging, or publishing Loopi.
 
 It is only a concise public-facing orientation file to help AI agents and contributors navigate the codebase and understand the shipped product shape.

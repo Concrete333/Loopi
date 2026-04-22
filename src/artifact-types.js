@@ -7,7 +7,9 @@ const ARTIFACT_TYPES = Object.freeze({
   'provider-readiness': 'provider-readiness',
   'provider-execution': 'provider-execution',
   'context-selection': 'context-selection',
-  'plan-clarifications': 'plan-clarifications'
+  'plan-clarifications': 'plan-clarifications',
+  'worktree-snapshot': 'worktree-snapshot',
+  'fork-record': 'fork-record'
 });
 
 const ARTIFACT_TYPE_SET = new Set(Object.values(ARTIFACT_TYPES));

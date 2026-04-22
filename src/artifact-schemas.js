@@ -59,6 +59,10 @@ function validateArtifactData(type, data) {
       return validateContextSelectionData(data);
     case 'plan-clarifications':
       return validatePlanClarificationsData(data);
+    case 'worktree-snapshot':
+      return validateWorktreeSnapshotData(data);
+    case 'fork-record':
+      return validateForkRecordData(data);
     default:
       throw new Error(`Unsupported artifact type "${type}".`);
   }
@@ -269,6 +273,106 @@ function validatePlanClarificationsData(data) {
     if (typeof item.usedDefault !== 'boolean') {
       throw new Error(`plan-clarifications artifact "data.clarifications[${i}].usedDefault" must be a boolean.`);
     }
+  }
+}
+
+function validateWorktreeSnapshotData(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('worktree-snapshot artifact "data" must be an object.');
+  }
+
+  const allowedScopes = new Set(['run-start', 'pre-step', 'post-step', 'run-end', 'manual-fork']);
+  if (typeof data.scope !== 'string' || !allowedScopes.has(data.scope)) {
+    throw new Error('worktree-snapshot artifact "data.scope" must be one of: run-start, pre-step, post-step, run-end, manual-fork.');
+  }
+
+  if (data.stepId !== undefined && data.stepId !== null && typeof data.stepId !== 'string') {
+    throw new Error('worktree-snapshot artifact "data.stepId" must be a string or null when present.');
+  }
+  if (data.stage !== undefined && data.stage !== null && typeof data.stage !== 'string') {
+    throw new Error('worktree-snapshot artifact "data.stage" must be a string or null when present.');
+  }
+  if (data.agent !== undefined && data.agent !== null && typeof data.agent !== 'string') {
+    throw new Error('worktree-snapshot artifact "data.agent" must be a string or null when present.');
+  }
+  if (typeof data.canWrite !== 'boolean') {
+    throw new Error('worktree-snapshot artifact "data.canWrite" must be a boolean.');
+  }
+  if (typeof data.gitAvailable !== 'boolean') {
+    throw new Error('worktree-snapshot artifact "data.gitAvailable" must be a boolean.');
+  }
+  if (data.gitHead !== undefined && data.gitHead !== null && typeof data.gitHead !== 'string') {
+    throw new Error('worktree-snapshot artifact "data.gitHead" must be a string or null when present.');
+  }
+  if (data.gitHeadShort !== undefined && data.gitHeadShort !== null && typeof data.gitHeadShort !== 'string') {
+    throw new Error('worktree-snapshot artifact "data.gitHeadShort" must be a string or null when present.');
+  }
+  if (!Array.isArray(data.statusPorcelain)) {
+    throw new Error('worktree-snapshot artifact "data.statusPorcelain" must be an array.');
+  }
+  for (let i = 0; i < data.statusPorcelain.length; i += 1) {
+    if (typeof data.statusPorcelain[i] !== 'string') {
+      throw new Error(`worktree-snapshot artifact "data.statusPorcelain[${i}]" must be a string.`);
+    }
+  }
+  if (!Array.isArray(data.changedFiles)) {
+    throw new Error('worktree-snapshot artifact "data.changedFiles" must be an array.');
+  }
+  for (let i = 0; i < data.changedFiles.length; i += 1) {
+    const item = data.changedFiles[i];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`worktree-snapshot artifact "data.changedFiles[${i}]" must be an object.`);
+    }
+    if (typeof item.status !== 'string' || item.status.trim() === '') {
+      throw new Error(`worktree-snapshot artifact "data.changedFiles[${i}].status" must be a non-empty string.`);
+    }
+    if (typeof item.path !== 'string' || item.path.trim() === '') {
+      throw new Error(`worktree-snapshot artifact "data.changedFiles[${i}].path" must be a non-empty string.`);
+    }
+    if (item.previousPath !== undefined && item.previousPath !== null && typeof item.previousPath !== 'string') {
+      throw new Error(`worktree-snapshot artifact "data.changedFiles[${i}].previousPath" must be a string or null when present.`);
+    }
+  }
+  if (!Array.isArray(data.untrackedFiles)) {
+    throw new Error('worktree-snapshot artifact "data.untrackedFiles" must be an array.');
+  }
+  for (let i = 0; i < data.untrackedFiles.length; i += 1) {
+    if (typeof data.untrackedFiles[i] !== 'string') {
+      throw new Error(`worktree-snapshot artifact "data.untrackedFiles[${i}]" must be a string.`);
+    }
+  }
+  if (data.patchFile !== undefined && data.patchFile !== null && typeof data.patchFile !== 'string') {
+    throw new Error('worktree-snapshot artifact "data.patchFile" must be a string or null when present.');
+  }
+  if (data.stagedPatchFile !== undefined && data.stagedPatchFile !== null && typeof data.stagedPatchFile !== 'string') {
+    throw new Error('worktree-snapshot artifact "data.stagedPatchFile" must be a string or null when present.');
+  }
+  if (typeof data.dirty !== 'boolean') {
+    throw new Error('worktree-snapshot artifact "data.dirty" must be a boolean.');
+  }
+  if (data.captureError !== undefined && data.captureError !== null && typeof data.captureError !== 'string') {
+    throw new Error('worktree-snapshot artifact "data.captureError" must be a string or null when present.');
+  }
+}
+
+function validateForkRecordData(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('fork-record artifact "data" must be an object.');
+  }
+  if (typeof data.forkedFromRunId !== 'string' || data.forkedFromRunId.trim() === '') {
+    throw new Error('fork-record artifact "data.forkedFromRunId" must be a non-empty string.');
+  }
+  if (data.forkedFromStepId !== undefined && data.forkedFromStepId !== null && typeof data.forkedFromStepId !== 'string') {
+    throw new Error('fork-record artifact "data.forkedFromStepId" must be a string or null when present.');
+  }
+  if (data.baseCommit !== undefined && data.baseCommit !== null && typeof data.baseCommit !== 'string') {
+    throw new Error('fork-record artifact "data.baseCommit" must be a string or null when present.');
+  }
+  if (data.reason !== undefined && data.reason !== null && typeof data.reason !== 'string') {
+    throw new Error('fork-record artifact "data.reason" must be a string or null when present.');
+  }
+  if (data.recordedBy !== undefined && data.recordedBy !== null && typeof data.recordedBy !== 'string') {
+    throw new Error('fork-record artifact "data.recordedBy" must be a string or null when present.');
   }
 }
 

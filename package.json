@@ -1,5 +1,5 @@
 {
-  "name": "dialectic",
+  "name": "loopi",
   "version": "0.1.0",
   "description": "Structured multi-agent coding workflows across AI CLIs and OpenAI-compatible providers.",
   "main": "src/orchestrator.js",

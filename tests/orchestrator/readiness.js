@@ -4,7 +4,7 @@ const { validateProviderAssignments, __test } = require('../../src/orchestrator'
 const {
   assert,
   PROJECT_ROOT,
-  DialecticOrchestrator,
+  LoopiOrchestrator,
   normalizeTaskConfig,
   createConfig,
   createRun
@@ -214,7 +214,7 @@ module.exports = async function registerReadinessTests(test) {
   });
 
   await test('ensureProviderReadiness with no providers does nothing', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'review',
       agents: ['claude']
@@ -224,7 +224,7 @@ module.exports = async function registerReadinessTests(test) {
   });
 
   await test('ensureProviderReadiness with CLI-only providers does nothing', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'review',
       agents: ['claude', 'codex']
@@ -236,7 +236,7 @@ module.exports = async function registerReadinessTests(test) {
   console.log('\norchestrator: Commit 8 moved to runMode() - Enforcement boundary');
 
   test('direct runMode() call rejects HTTP implement origin', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'implement',
       agents: ['nim-local'],
@@ -262,7 +262,7 @@ module.exports = async function registerReadinessTests(test) {
   });
 
   await test('direct runMode() performs readiness checks before dispatch', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'review',
       agents: ['nim-local'],
@@ -292,7 +292,7 @@ module.exports = async function registerReadinessTests(test) {
   console.log('\norchestrator: Commit 8 - Failed readiness aborts before mode dispatch');
 
   await test('readiness failure in plan mode prevents dispatch', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'plan',
       agents: ['claude'],
@@ -332,7 +332,7 @@ module.exports = async function registerReadinessTests(test) {
   });
 
   await test('readiness failure in review mode prevents dispatch', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'review',
       agents: ['claude'],
@@ -372,7 +372,7 @@ module.exports = async function registerReadinessTests(test) {
   });
 
   await test('HTTP provider as implement origin is rejected by validation (before readiness runs)', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'implement',
       agents: ['nim-local'],
@@ -409,7 +409,7 @@ module.exports = async function registerReadinessTests(test) {
   });
 
   await test('unused failing provider does not block run dispatch', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'plan',
       agents: ['claude'],
@@ -441,7 +441,7 @@ module.exports = async function registerReadinessTests(test) {
   });
 
   await test('failed readiness aborts before runIterativeImplementMode dispatch', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'implement',
       agents: ['claude'],
@@ -483,7 +483,7 @@ module.exports = async function registerReadinessTests(test) {
   console.log('\norchestrator: Commit 8 - Successful readiness allows dispatch');
 
   await test('successful readiness allows runPlanMode dispatch', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'plan',
       agents: ['claude']
@@ -508,7 +508,7 @@ module.exports = async function registerReadinessTests(test) {
   });
 
   await test('successful readiness allows runCollaborativeMode dispatch', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'review',
       agents: ['claude']
@@ -533,7 +533,7 @@ module.exports = async function registerReadinessTests(test) {
   });
 
   await test('successful readiness allows runIterativeImplementMode dispatch', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'implement',
       agents: ['claude']
@@ -558,7 +558,7 @@ module.exports = async function registerReadinessTests(test) {
   });
 
   await test('CLI-only config skips readiness cleanly', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'review',
       agents: ['claude', 'codex']
@@ -570,7 +570,7 @@ module.exports = async function registerReadinessTests(test) {
   console.log('\norchestrator: Commit 10 - Context root resolution');
 
   await test('runMode builds context index relative to project root even when settings.cwd is narrowed', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const tempContextDirName = '__tmp_commit10_context_root__';
     const tempContextDir = path.join(PROJECT_ROOT, tempContextDirName);
     const tempContextFile = path.join(tempContextDir, 'shared-guidelines.md');

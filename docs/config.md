@@ -9,7 +9,7 @@ If you prefer manual configuration, or want to inspect and tweak the generated c
 ```json
 {
   "mode": "plan",
-  "prompt": "Scan Dialectic and look for holes in my logic, sloppy code, or code problems.",
+  "prompt": "Scan Loopi and look for holes in my logic, sloppy code, or code problems.",
   "agents": ["claude", "codex", "gemini", "opencode"],
   "settings": {
     "timeoutMs": 180000,
@@ -30,8 +30,35 @@ If you prefer manual configuration, or want to inspect and tweak the generated c
 - `settings.implementLoops` controls standalone iterative `implement` mode. It falls back to `qualityLoops`, then `1`.
 - `settings.implementLoopsPerUnit` controls one-shot implement loops per plan unit. It falls back to `implementLoops`, then `qualityLoops`, then `1`.
 - `settings.agentPolicies` controls per-agent write permissions.
+- `fork` is an optional top-level lineage block for manually forked retries.
 - `plan` and `review` use compact machine-readable handoffs internally, with non-fatal fallback to prose when a handoff block is missing or malformed.
 - Legacy `task` is still accepted as an alias for `prompt`.
+
+## Fork Lineage
+
+If a task is a manual retry of an earlier run, you can include a top-level `fork` block:
+
+```json
+"fork": {
+  "forkedFromRunId": "run-2026-04-21T12-34-56-789Z",
+  "forkedFromStepId": "implement-4",
+  "baseCommit": "abc123def456",
+  "reason": "Retry with different reviewer feedback",
+  "recordedBy": "manual"
+}
+```
+
+Rules:
+
+- `fork` is optional.
+- `fork.forkedFromRunId` is required when `fork` is present.
+- `fork.forkedFromStepId`, `fork.baseCommit`, `fork.reason`, and `fork.recordedBy` are optional.
+- If `recordedBy` is omitted, Loopi defaults it to `manual`.
+
+You do not have to write this block by hand. `npm run cli -- fork <runId> [stepId]` will create it for you.
+If you provide `stepId`, Loopi requires a persisted `post-step` or `pre-step` snapshot for that exact step and will fail rather than falling back to a run-level snapshot.
+
+See `shared/task.example.json` for `manualForkExample`.
 
 ## Implement Guidance
 
@@ -63,7 +90,7 @@ Rules:
 - Any supported agent can be configured with `canWrite: true`. By default, all agents start as read-only unless explicitly opted in.
 - Write access only applies during `implement` mode, and only to the origin agent for that sub-run.
 - `plan` and `review` modes are always read-only, regardless of agent policy.
-- Dialectic passes the `canWrite` intent to each agent's CLI. The actual CLI flags used depend on the installed tool.
+- Loopi passes the `canWrite` intent to each agent's CLI. The actual CLI flags used depend on the installed tool.
 - A validation warning is emitted when `canWrite: true` is configured, reminding you that the agent will modify repository files directly.
 
 ## Agent Options
@@ -99,7 +126,7 @@ Unknown keys are rejected. Each `agentOptions.<agent>` object may only contain `
 
 ## Fallback Downgrades
 
-When an agent's primary invocation fails and a fallback is used, some capabilities may be lost. Dialectic records these as `capabilityDowngrades` on the step record.
+When an agent's primary invocation fails and a fallback is used, some capabilities may be lost. Loopi records these as `capabilityDowngrades` on the step record.
 
 | Agent | Fallback | Capabilities dropped |
 | --- | --- | --- |
@@ -133,3 +160,33 @@ Rules:
 - One-shot implement loops run per structured plan unit using `settings.implementLoopsPerUnit`.
 
 See `shared/task.example.json` for a complete example.
+
+## Audit Outputs
+
+Loopi now records a lightweight audit trail around each run.
+
+The main outputs are:
+
+- `shared/scratchpad.txt`
+- `shared/runs.ndjson`
+- `shared/tasks/<runId>/task.json`
+- `shared/tasks/<runId>/steps.ndjson`
+- `shared/tasks/<runId>/artifacts/*.json`
+- `shared/tasks/<runId>/patches/*.patch`
+
+Important artifact types:
+
+- `worktree-snapshot`
+  - recorded at `run-start`
+  - recorded at `pre-step` and `post-step` for write-enabled steps
+  - recorded at `run-end`
+- `fork-record`
+  - recorded when a run starts with a top-level `fork` block
+
+This gives you a durable record of:
+
+- which agent ran which stage
+- when the step happened
+- what the worktree looked like before and after write-enabled steps
+- which patch files were captured for later inspection
+- whether a run was explicitly forked from an earlier run or step

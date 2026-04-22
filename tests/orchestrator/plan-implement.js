@@ -1,7 +1,7 @@
 const {
   assert,
   PROJECT_ROOT,
-  DialecticOrchestrator,
+  LoopiOrchestrator,
   normalizeTaskConfig,
   createConfig,
   createRun
@@ -11,19 +11,19 @@ module.exports = async function registerPlanImplementTests(test) {
   console.log('orchestrator: plan mode');
 
   await test('runMode routes plan mode through runPlanMode', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     assert.strictEqual(typeof orchestrator.runMode, 'function');
     assert.strictEqual(typeof orchestrator.runPlanMode, 'function');
   });
 
   await test('runCollaborativeMode accepts modeBuilderOptions parameter', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const fnString = orchestrator.runCollaborativeMode.toString();
     assert.ok(fnString.includes('modeBuilderOptions'));
   });
 
   await test('runPlanMode uses useCase-aware initial prompt on first loop', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const originalRunStep = orchestrator.runStep;
     const capturedPrompts = [];
 
@@ -91,7 +91,7 @@ module.exports = async function registerPlanImplementTests(test) {
   });
 
   await test('runStep includes plan-mode useCase handoff options in implementation', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const fnString = orchestrator.runStep.toString();
     assert.ok(fnString.includes("mode === 'plan' ? { useCase: config.useCase || null } : {}"));
   });
@@ -99,18 +99,18 @@ module.exports = async function registerPlanImplementTests(test) {
   console.log('orchestrator: implement loop engine');
 
   await test('runImplementLoopSequence exists and is a function', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     assert.strictEqual(typeof orchestrator.runImplementLoopSequence, 'function');
   });
 
   await test('runImplementLoopSequence does not have modeBuilderOptions parameter', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const fnString = orchestrator.runImplementLoopSequence.toString();
     assert.ok(!fnString.includes('modeBuilderOptions'), 'modeBuilderOptions should not be present in runImplementLoopSequence');
   });
 
   await test('runImplementLoopSequence tracks failure metadata on error', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, implementLoops: 3 } });
     const run = createRun(config);
     const originalRunStep = orchestrator.runStep;
@@ -167,7 +167,7 @@ module.exports = async function registerPlanImplementTests(test) {
   });
 
   await test('runImplementLoopSequence with initialImplementNeeded=false returns seeded initial state', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, implementLoops: 1 } });
     const run = createRun(config);
     const originalRunStep = orchestrator.runStep;
@@ -207,7 +207,7 @@ module.exports = async function registerPlanImplementTests(test) {
   });
 
   await test('runImplementLoopSequence builds review prompts with accumulated feedback', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       agents: ['claude', 'codex', 'gemini'],
       settings: { cwd: '.', timeoutMs: 10000, implementLoops: 1 }
@@ -262,7 +262,7 @@ module.exports = async function registerPlanImplementTests(test) {
   });
 
   await test('runImplementLoopSequence with initialImplementNeeded=false fails without seeded state', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, implementLoops: 1 } });
     const run = createRun(config);
 
@@ -282,7 +282,7 @@ module.exports = async function registerPlanImplementTests(test) {
   });
 
   await test('runImplementLoopSequence no longer shadows currentLoop in the review/repair loop', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const loopFnString = orchestrator.runImplementLoopSequence.toString();
     assert.ok(loopFnString.includes('let currentLoop = 0;'));
     assert.ok(loopFnString.includes('for (currentLoop = 1;'));
@@ -292,18 +292,18 @@ module.exports = async function registerPlanImplementTests(test) {
   console.log('orchestrator: standalone implement mode');
 
   await test('runIterativeImplementMode exists and is a function', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     assert.strictEqual(typeof orchestrator.runIterativeImplementMode, 'function');
   });
 
   await test('runIterativeImplementMode uses config.settings.implementLoops', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const fnString = orchestrator.runIterativeImplementMode.toString();
     assert.ok(fnString.includes('config.settings.implementLoops'));
   });
 
   await test('runIterativeImplementMode throws on failure with detailed error', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, implementLoops: 2 } });
     const run = createRun(config);
     const originalRunImplementLoopSequence = orchestrator.runImplementLoopSequence;
@@ -332,7 +332,7 @@ module.exports = async function registerPlanImplementTests(test) {
   });
 
   await test('runIterativeImplementMode forwards original prompt and custom implement guidance', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       prompt: 'Ship the feature safely',
       customImplementPrompt: 'Keep the edits narrowly scoped.',
@@ -378,7 +378,7 @@ module.exports = async function registerPlanImplementTests(test) {
   });
 
   await test('runMode routes implement mode through runIterativeImplementMode', async () => {
-    const orchestrator = new DialecticOrchestrator();
+    const orchestrator = new LoopiOrchestrator();
     const fnString = orchestrator.runMode.toString();
     assert.ok(fnString.includes("config.mode === 'implement'"));
     assert.ok(fnString.includes('runIterativeImplementMode'));

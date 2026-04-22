@@ -80,9 +80,23 @@ function artifactsDir(projectRoot, taskId) {
   return path.join(taskDir(projectRoot, taskId), 'artifacts');
 }
 
+function patchesDir(projectRoot, taskId) {
+  return path.join(taskDir(projectRoot, taskId), 'patches');
+}
+
 function artifactPath(projectRoot, taskId, artifactId) {
   const safeArtifactId = assertSafePathSegment(artifactId, 'artifactId');
   return path.join(artifactsDir(projectRoot, taskId), `${safeArtifactId}.json`);
+}
+
+function patchFilePath(projectRoot, taskId, snapshotId, suffix = '') {
+  const safeSnapshotId = assertSafePathSegment(snapshotId, 'snapshotId');
+  let normalizedSuffix = '';
+  if (suffix !== undefined && suffix !== null && String(suffix).trim() !== '') {
+    const safeSuffix = assertSafePathSegment(String(suffix).trim(), 'suffix');
+    normalizedSuffix = `.${safeSuffix}`;
+  }
+  return path.join(patchesDir(projectRoot, taskId), `${safeSnapshotId}${normalizedSuffix}.patch`);
 }
 
 module.exports = {
@@ -100,5 +114,7 @@ module.exports = {
   taskJsonPath,
   stepsNdjsonPath,
   artifactsDir,
-  artifactPath
+  patchesDir,
+  artifactPath,
+  patchFilePath
 };

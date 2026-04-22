@@ -74,7 +74,7 @@ Stage defaults:
 - The digest is built mechanically from the selected files, so it stays compact without a second summarization pass.
 - `maxInputChars` on a provider limits the rendered digest section, not the entire final prompt.
 - Runtime `[context]` log lines report actual emitted context chars and note later-cycle downgrades such as `(cycle 2 downgrade from full)`.
-- Set `DIALECTIC_SILENT=1` to suppress those log lines in CI or scripted runs.
+- Set `LOOPI_SILENT=1` to suppress those log lines in CI or scripted runs.
 - Set a stage to `none` to omit context entirely for that step.
 
 ## Tuning Workflow

@@ -114,5 +114,26 @@
       "reviewer": "nim-local",
       "fallback": "claude"
     }
+  },
+  "manualForkExample": {
+    "mode": "implement",
+    "prompt": "Retry the prior attempt with a tighter scope and one extra repair cycle.",
+    "agents": ["codex", "gemini"],
+    "fork": {
+      "forkedFromRunId": "run-2026-04-21T12-34-56-789Z",
+      "forkedFromStepId": "implement-4",
+      "baseCommit": "abc123def456",
+      "reason": "Retry with different reviewer feedback and tighter implement guidance",
+      "recordedBy": "manual"
+    },
+    "settings": {
+      "timeoutMs": 180000,
+      "continueOnError": false,
+      "writeScratchpad": true,
+      "implementLoops": 3,
+      "agentPolicies": {
+        "codex": { "canWrite": true }
+      }
+    }
   }
 }
