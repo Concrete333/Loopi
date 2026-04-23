@@ -13,6 +13,26 @@ const PROJECT_ROOT = path.join(__dirname, '..');
 
 let passed = 0;
 let failed = 0;
+const tempDirs = [];
+
+function createTempProject(prefix) {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(projectRoot);
+  return projectRoot;
+}
+
+function seedUseCases(projectRoot, names) {
+  const sourceDir = path.join(PROJECT_ROOT, 'config', 'use-cases');
+  const targetDir = path.join(projectRoot, 'config', 'use-cases');
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const name of names) {
+    const sourcePath = path.join(sourceDir, `${name}.json`);
+    if (!fs.existsSync(sourcePath)) {
+      throw new Error(`File not found: ${sourcePath}. The use-case files may have been renamed.`);
+    }
+    fs.copyFileSync(sourcePath, path.join(targetDir, `${name}.json`));
+  }
+}
 
 function createCaptureStream() {
   let buffer = '';
@@ -187,13 +207,16 @@ test('help text includes the beginner wizard commands', async () => {
 
   assert.strictEqual(exitCode, 0);
   assert.strictEqual(stderr.read(), '');
+  assert.match(stdout.read(), /First time\? Run: npm run cli -- doctor/);
+  assert.match(stdout.read(), /install\s+Install a supported agent helper when available/);
+  assert.match(stdout.read(), /login\s+Run the login flow for a supported agent/);
   assert.match(stdout.read(), /plan\s+Interactive plan-mode wizard/);
   assert.match(stdout.read(), /review\s+Interactive review-mode wizard/);
   assert.match(stdout.read(), /implement\s+Interactive implement-mode wizard/);
   assert.match(stdout.read(), /oneshot\s+Interactive one-shot wizard/);
   assert.match(stdout.read(), /fork\s+Create a forked shared\/task\.json from a prior run/);
   assert.match(stdout.read(), /compare\s+Compare two prior runs using recorded snapshots/);
-  assert.match(stdout.read(), /doctor\s+Check the current task file and selected agents/);
+  assert.match(stdout.read(), /doctor\s+Check the environment and current task/);
   assert.match(stdout.read(), /new\s+Start the opt-in advanced wizard/);
 });
 
@@ -401,11 +424,13 @@ test('open command prints scratchpad contents when present', async () => {
 });
 
 test('run command delegates to orchestrator init and runTask', async () => {
+  const stdout = createCaptureStream();
   const calls = [];
   let orchestratorProjectRoot = null;
 
   const exitCode = await runCli(['run'], {
     projectRoot: PROJECT_ROOT,
+    stdout,
     stat: async () => ({ isFile: () => true }),
     createOrchestrator: async (projectRoot) => {
       orchestratorProjectRoot = projectRoot;
@@ -421,6 +446,8 @@ test('run command delegates to orchestrator init and runTask', async () => {
   });
 
   assert.strictEqual(exitCode, 0);
+  assert.match(stdout.read(), /Starting run\.\.\./);
+  assert.match(stdout.read(), /Progress will appear below\./);
   assert.deepStrictEqual(calls, ['init', 'runTask']);
   assert.strictEqual(orchestratorProjectRoot, PROJECT_ROOT);
 });
@@ -452,11 +479,128 @@ test('run command reports a missing task file and does not invoke the orchestrat
   assert.strictEqual(stdout.read(), '');
   assert.strictEqual(createOrchestratorCalls, 0);
   assert.match(stderr.read(), /No task file at/);
+  assert.match(stderr.read(), /npm run cli -- doctor/);
   assert.match(stderr.read(), /npm run cli -- plan/);
 });
 
+test('install command confirms and delegates to the setup helper', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+  const io = createMockIO(['y']);
+  const calls = [];
+
+  const exitCode = await runCli(['install', 'claude'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr,
+    createIO: () => io,
+    installHelper: async (agentId, options) => {
+      calls.push({ agentId, options });
+      return {
+        success: true,
+        message: 'Claude Code install finished. Setup status was refreshed automatically.',
+        statusAfter: {
+          status: 'installed_but_needs_login',
+          ready: false
+        }
+      };
+    }
+  });
+
+  assert.strictEqual(exitCode, 0);
+  assert.strictEqual(stderr.read(), '');
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].agentId, 'claude');
+  assert.strictEqual(calls[0].options.approved, true);
+  assert.match(stdout.read(), /install finished/i);
+  assert.match(stdout.read(), /Status after install: installed_but_needs_login/);
+});
+
+test('install command rejects missing agent names with usage guidance', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+
+  const exitCode = await runCli(['install'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr
+  });
+
+  assert.strictEqual(exitCode, 1);
+  assert.strictEqual(stdout.read(), '');
+  assert.match(stderr.read(), /Usage: npm run cli -- install <agent>/);
+  assert.match(stderr.read(), /Supported agents:/);
+});
+
+test('install command reports when an agent has no built-in install helper', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+
+  const exitCode = await runCli(['install', 'kilo'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr
+  });
+
+  assert.strictEqual(exitCode, 1);
+  assert.strictEqual(stdout.read(), '');
+  assert.match(stderr.read(), /does not have a built-in install helper/);
+});
+
+test('login command can be cancelled before launching the helper', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+  const io = createMockIO(['n']);
+  let calls = 0;
+
+  const exitCode = await runCli(['login', 'codex'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr,
+    createIO: () => io,
+    loginHelper: async () => {
+      calls += 1;
+      return {
+        success: true,
+        message: 'should not run'
+      };
+    }
+  });
+
+  assert.strictEqual(exitCode, 0);
+  assert.strictEqual(stderr.read(), '');
+  assert.strictEqual(calls, 0);
+  assert.match(stdout.read(), /Login cancelled\./);
+});
+
+test('login command surfaces helper failures as non-zero exits', async () => {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+  const io = createMockIO(['y']);
+
+  const exitCode = await runCli(['login', 'codex'], {
+    projectRoot: PROJECT_ROOT,
+    stdout,
+    stderr,
+    createIO: () => io,
+    loginHelper: async () => ({
+      success: false,
+      message: 'Codex CLI login command failed.',
+      statusAfter: {
+        status: 'installed_but_needs_login',
+        ready: false
+      }
+    })
+  });
+
+  assert.strictEqual(exitCode, 1);
+  assert.strictEqual(stderr.read(), '');
+  assert.match(stdout.read(), /login command failed/i);
+  assert.match(stdout.read(), /Status after login: installed_but_needs_login/);
+});
+
 test('orchestrator constructor honors an injected projectRoot', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-orchestrator-root-'));
+  const projectRoot = createTempProject('aibridge-orchestrator-root-');
   const orchestrator = new LoopiOrchestrator({ projectRoot });
 
   assert.strictEqual(orchestrator.projectRoot, projectRoot);
@@ -670,7 +814,7 @@ test('preset use copies a preset into shared/task.json and prints the run hint',
 });
 
 test('preset save validates and writes the current task into shared/presets', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-preset-save-'));
+  const projectRoot = createTempProject('aibridge-preset-save-');
   const recorder = createAtomicRecorder();
 
   const { savePreset } = require('../src/cli-presets');
@@ -698,7 +842,7 @@ test('preset save validates and writes the current task into shared/presets', as
 });
 
 test('preset use validates and writes the selected preset into shared/task.json', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-preset-use-'));
+  const projectRoot = createTempProject('aibridge-preset-use-');
   const recorder = createAtomicRecorder();
 
   const { usePreset } = require('../src/cli-presets');
@@ -1002,15 +1146,22 @@ test('resolveWizardMode maps oneshot command to one-shot config mode', async () 
 });
 
 test('beginner wizard writes a validated plan config and prints run-later guidance', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-plan-'));
+  const projectRoot = createTempProject('aibridge-cli-plan-');
   fs.mkdirSync(path.join(projectRoot, 'context'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, 'context', 'notes.md'), 'Reference notes');
+  seedUseCases(projectRoot, ['coding', 'academic-paper']);
 
+  // listAvailableUseCases returns names sorted alphabetically: academic-paper, coding.
+  // Use-case menu choice '2' = coding.
   const io = createMockIO([
     '',
     'Review this repo for cleanup opportunities',
     '1,2',
+    '2',
+    '3', // planLoops
     'y',
-    'n'
+    'n',
+    'y'
   ]);
 
   const recorder = createAtomicRecorder();
@@ -1031,23 +1182,133 @@ test('beginner wizard writes a validated plan config and prints run-later guidan
   const writtenConfig = JSON.parse(recorder.finalWrites[0].content);
   assert.strictEqual(writtenConfig.mode, 'plan');
   assert.strictEqual(writtenConfig.prompt, 'Review this repo for cleanup opportunities');
+  assert.strictEqual(writtenConfig.useCase, 'coding');
   assert.deepStrictEqual(writtenConfig.agents, ['claude', 'codex']);
   assert.deepStrictEqual(writtenConfig.context, { dir: './context' });
+  assert.strictEqual(writtenConfig.settings.planLoops, 3);
   assert.ok(result.normalizedConfig);
   assert.deepStrictEqual(result.normalizedConfig.agents, ['claude', 'codex']);
   assert.ok(io.getLines().includes('Please enter a non-empty prompt.'));
+  assert.ok(io.getLines().some((line) => line.includes('About to write:')));
   assert.ok(io.getLines().some((line) => line.includes('Task written to')));
   assert.ok(io.getLines().some((line) => line.includes('npm run cli -- run')));
   assert.strictEqual(io.isClosed(), true);
 });
 
+test('beginner plan wizard defaults loop counts to 1 and skips empty context folders', async () => {
+  const projectRoot = createTempProject('aibridge-cli-plan-defaults-');
+  fs.mkdirSync(path.join(projectRoot, 'context'), { recursive: true });
+  const io = createMockIO([
+    'Plan this repo',
+    'claude',
+    '',
+    'n',
+    'y'
+  ]);
+
+  const recorder = createAtomicRecorder();
+  const result = await runBeginnerWizard('plan', {
+    io,
+    projectRoot,
+    mkdir: async () => {},
+    writeFile: recorder.writeFile,
+    rename: recorder.rename,
+    unlink: recorder.unlink
+  });
+
+  assert.strictEqual(result.runNow, false);
+  const writtenConfig = JSON.parse(recorder.finalWrites[0].content);
+  assert.strictEqual(writtenConfig.settings.planLoops, 1);
+  assert.strictEqual(writtenConfig.context, undefined);
+  assert.ok(io.getLines().some((line) => line.includes('plan loops: 1')));
+  assert.strictEqual(io.isClosed(), true);
+});
+
+test('beginner plan wizard falls back cleanly when ./context cannot be inspected', async () => {
+  const projectRoot = createTempProject('aibridge-cli-plan-context-warn-');
+  fs.mkdirSync(path.join(projectRoot, 'context'), { recursive: true });
+  const io = createMockIO([
+    'Plan this repo',
+    'claude',
+    '',
+    'y',
+    'n',
+    'y'
+  ]);
+
+  const recorder = createAtomicRecorder();
+  const result = await runBeginnerWizard('plan', {
+    io,
+    projectRoot,
+    mkdir: async () => {},
+    readdir: async () => {
+      const error = new Error('access denied');
+      error.code = 'EACCES';
+      throw error;
+    },
+    writeFile: recorder.writeFile,
+    rename: recorder.rename,
+    unlink: recorder.unlink
+  });
+
+  assert.strictEqual(result.runNow, false);
+  const writtenConfig = JSON.parse(recorder.finalWrites[0].content);
+  assert.deepStrictEqual(writtenConfig.context, { dir: './context' });
+  assert.ok(io.getLines().some((line) => line.includes('Could not inspect ./context: access denied')));
+  assert.ok(io.getLines().some((line) => line.includes('./context (file count unavailable)')));
+  assert.strictEqual(io.isClosed(), true);
+});
+
+test('beginner plan wizard warns and continues when use-case discovery fails', async () => {
+  const projectRoot = createTempProject('aibridge-cli-plan-loader-error-');
+  const io = createMockIO([
+    'Plan the rollout',
+    '1',
+    '2',
+    'n',
+    'y'
+  ]);
+
+  const recorder = createAtomicRecorder();
+  const result = await runBeginnerWizard('plan', {
+    io,
+    projectRoot,
+    listUseCases: () => {
+      const error = new Error('permission denied');
+      error.code = 'EACCES';
+      throw error;
+    },
+    mkdir: async () => {},
+    writeFile: recorder.writeFile,
+    rename: recorder.rename,
+    unlink: recorder.unlink
+  });
+
+  assert.strictEqual(result.mode, 'plan');
+  assert.strictEqual(result.runNow, false);
+  assert.strictEqual(recorder.finalWrites.length, 1);
+
+  const writtenConfig = JSON.parse(recorder.finalWrites[0].content);
+  assert.strictEqual(writtenConfig.mode, 'plan');
+  assert.strictEqual(writtenConfig.useCase, undefined);
+  assert.strictEqual(writtenConfig.settings.planLoops, 2);
+  assert.ok(io.getLines().some((line) => line.includes('Could not read available use cases: permission denied. Continuing without a use case.')));
+  assert.strictEqual(io.isClosed(), true);
+});
+
 test('beginner wizard writes one-shot config with explicit write-enabled agent', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-oneshot-'));
+  const projectRoot = createTempProject('aibridge-cli-oneshot-');
+  seedUseCases(projectRoot, ['coding', 'academic-paper']);
   const io = createMockIO([
     'Implement this feature safely',
     'codex,claude',
+    'coding',
+    '2', // qualityLoops
+    '3', // planLoops
+    '2', // sectionImplementLoops
     'y',
     '1',
+    'y',
     'y'
   ]);
 
@@ -1072,17 +1333,19 @@ test('beginner wizard writes one-shot config with explicit write-enabled agent',
 
   const writtenConfig = JSON.parse(recorder.finalWrites[0].content);
   assert.strictEqual(writtenConfig.mode, 'one-shot');
+  assert.strictEqual(writtenConfig.useCase, 'coding');
   assert.deepStrictEqual(writtenConfig.agents, ['codex', 'claude']);
-  assert.deepStrictEqual(writtenConfig.settings, {
-    agentPolicies: {
-      codex: { canWrite: true }
-    }
+  assert.strictEqual(writtenConfig.settings.planLoops, 3);
+  assert.strictEqual(writtenConfig.settings.qualityLoops, 2);
+  assert.strictEqual(writtenConfig.settings.sectionImplementLoops, 2);
+  assert.deepStrictEqual(writtenConfig.settings.agentPolicies, {
+    codex: { canWrite: true }
   });
   assert.strictEqual(io.isClosed(), true);
 });
 
 test('beginner wizard does not write partial config when prompting is interrupted', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-cancel-'));
+  const projectRoot = createTempProject('aibridge-cli-cancel-');
   const io = createMockIO([new Error('cancelled')]);
   let writeCalls = 0;
 
@@ -1102,19 +1365,26 @@ test('beginner wizard does not write partial config when prompting is interrupte
 });
 
 test('advanced wizard writes a plan config with optional review and synthesis prompts', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-advanced-plan-'));
+  const projectRoot = createTempProject('aibridge-cli-advanced-plan-');
   fs.mkdirSync(path.join(projectRoot, 'context'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, 'context', 'plan.md'), 'Reference plan');
+  seedUseCases(projectRoot, ['coding', 'academic-paper']);
 
+  // listAvailableUseCases returns names sorted alphabetically: academic-paper, coding.
+  // Use-case menu choice '1' = academic-paper.
   const io = createMockIO([
     '1',
     'Plan the cleanup in detail',
     '1,2',
+    '1',
+    '2', // planLoops
     'y',
     'y',
     'Focus on edge cases',
     'y',
     'Keep the final plan concise',
-    'n'
+    'n',
+    'y'
   ]);
 
   const recorder = createAtomicRecorder();
@@ -1132,23 +1402,27 @@ test('advanced wizard writes a plan config with optional review and synthesis pr
   assert.strictEqual(recorder.finalWrites.length, 1);
   const writtenConfig = JSON.parse(recorder.finalWrites[0].content);
   assert.strictEqual(writtenConfig.mode, 'plan');
+  assert.strictEqual(writtenConfig.useCase, 'academic-paper');
   assert.strictEqual(writtenConfig.reviewPrompt, 'Focus on edge cases');
   assert.strictEqual(writtenConfig.synthesisPrompt, 'Keep the final plan concise');
   assert.deepStrictEqual(writtenConfig.context, { dir: './context' });
+  assert.strictEqual(writtenConfig.settings.planLoops, 2);
   assert.ok(io.getLines().some((line) => line.includes('Task written to')));
   assert.strictEqual(io.isClosed(), true);
 });
 
 test('advanced wizard writes implement config with custom implement guidance', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-advanced-implement-'));
+  const projectRoot = createTempProject('aibridge-cli-advanced-implement-');
   const io = createMockIO([
     'implement',
     'Implement the feature safely',
     'codex,claude',
+    '3', // implementLoops / qualityLoops for implement mode
     'y',
     'codex',
     'y',
     'Use small reversible changes',
+    'y',
     'y'
   ]);
 
@@ -1173,24 +1447,28 @@ test('advanced wizard writes implement config with custom implement guidance', a
   const writtenConfig = JSON.parse(recorder.finalWrites[0].content);
   assert.strictEqual(writtenConfig.mode, 'implement');
   assert.strictEqual(writtenConfig.customImplementPrompt, 'Use small reversible changes');
-  assert.deepStrictEqual(writtenConfig.settings, {
-    agentPolicies: {
-      codex: { canWrite: true }
-    }
+  assert.strictEqual(writtenConfig.settings.implementLoops, 3);
+  assert.deepStrictEqual(writtenConfig.settings.agentPolicies, {
+    codex: { canWrite: true }
   });
+  // Normalized config should have implementLoops from qualityLoops fallback
+  assert.strictEqual(result.normalizedConfig.settings.implementLoops, 3);
   assert.strictEqual(io.isClosed(), true);
 });
 
 test('advanced wizard can omit optional prompt overrides cleanly', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-advanced-plan-min-'));
+  const projectRoot = createTempProject('aibridge-cli-advanced-plan-min-');
+  seedUseCases(projectRoot, ['coding', 'academic-paper']);
   const io = createMockIO([
     'plan',
     'Plan the cleanup',
     'claude',
+    'coding',
+    '1', // planLoops
     'n',
     'n',
     'n',
-    'n'
+    'y'
   ]);
   const recorder = createAtomicRecorder();
 
@@ -1214,13 +1492,17 @@ test('advanced wizard can omit optional prompt overrides cleanly', async () => {
   assert.deepStrictEqual(writtenConfig, {
     mode: 'plan',
     prompt: 'Plan the cleanup',
-    agents: ['claude']
+    agents: ['claude'],
+    useCase: 'coding',
+    settings: {
+      planLoops: 1
+    }
   });
   assert.strictEqual(io.isClosed(), true);
 });
 
 test('advanced wizard does not write partial config when prompting is interrupted', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-advanced-cancel-'));
+  const projectRoot = createTempProject('aibridge-cli-advanced-cancel-');
   const io = createMockIO([new Error('cancelled')]);
   let writeCalls = 0;
 
@@ -1255,12 +1537,14 @@ test('preset command rejects invalid subcommands and missing names', async () =>
 });
 
 test('process-level smoke: plan wizard accepts real piped stdin and writes shared/task.json without running immediately', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-smoke-plan-'));
+  const projectRoot = createTempProject('aibridge-cli-smoke-plan-');
+  // Deliberately omit config/use-cases/ to prove plan mode works on a fresh install without them.
   const result = runCliPipedProcess(['plan'], {
     projectRoot,
     inputLines: [
       'Smoke-plan this repo',
       'claude',
+      '1', // planLoops
       'n'
     ]
   });
@@ -1276,12 +1560,15 @@ test('process-level smoke: plan wizard accepts real piped stdin and writes share
   assert.deepStrictEqual(rawConfig, {
     mode: 'plan',
     prompt: 'Smoke-plan this repo',
-    agents: ['claude']
+    agents: ['claude'],
+    settings: {
+      planLoops: 1
+    }
   });
 });
 
 test('process-level smoke: open reports a missing scratchpad in a clean project root', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-smoke-open-'));
+  const projectRoot = createTempProject('aibridge-cli-smoke-open-');
   const result = runCliProcess(['open'], { projectRoot });
 
   if (allowSandboxedSpawnSkip(result)) {
@@ -1294,13 +1581,16 @@ test('process-level smoke: open reports a missing scratchpad in a clean project 
 });
 
 test('process-level smoke: advanced wizard accepts real piped stdin and writes a config without prompt overrides', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-smoke-advanced-'));
+  const projectRoot = createTempProject('aibridge-cli-smoke-advanced-');
+  seedUseCases(projectRoot, ['coding']);
   const result = runCliPipedProcess(['new', '--advanced'], {
     projectRoot,
     inputLines: [
       'plan',
       'Advanced smoke plan',
       'claude',
+      'coding',
+      '1', // planLoops
       'n',
       'n',
       'n',
@@ -1319,12 +1609,16 @@ test('process-level smoke: advanced wizard accepts real piped stdin and writes a
   assert.deepStrictEqual(rawConfig, {
     mode: 'plan',
     prompt: 'Advanced smoke plan',
-    agents: ['claude']
+    agents: ['claude'],
+    useCase: 'coding',
+    settings: {
+      planLoops: 1
+    }
   });
 });
 
 test('process-level smoke: preset save and use work end-to-end', async () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aibridge-cli-smoke-preset-'));
+  const projectRoot = createTempProject('aibridge-cli-smoke-preset-');
   fs.mkdirSync(taskPaths.sharedDir(projectRoot), { recursive: true });
   fs.writeFileSync(taskPaths.legacyTaskFile(projectRoot), JSON.stringify({
     mode: 'review',
@@ -1358,6 +1652,9 @@ test('process-level smoke: preset save and use work end-to-end', async () => {
 });
 
 process.on('exit', () => {
+  for (const projectRoot of tempDirs) {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
   console.log(`cli.test.js: ${passed} passed, ${failed} failed`);
   if (failed > 0) {
     process.exitCode = 1;

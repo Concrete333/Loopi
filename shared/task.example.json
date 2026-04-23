@@ -2,15 +2,16 @@
   "oneShotExample": {
     "mode": "one-shot",
     "prompt": "Describe the work you want the agent loop to handle end-to-end.",
+    "useCase": "coding",
     "customImplementPrompt": "Keep changes narrowly scoped to the current unit, prefer small reversible edits, and call out any blocker instead of guessing.",
     "agents": ["claude", "codex", "gemini"],
     "settings": {
       "timeoutMs": 180000,
       "continueOnError": false,
       "writeScratchpad": true,
+      "planLoops": 3,
       "qualityLoops": 2,
-      "implementLoops": 2,
-      "implementLoopsPerUnit": 3,
+      "sectionImplementLoops": 2,
       "oneShotOrigins": {
         "plan": "claude",
         "implement": "codex",
@@ -29,6 +30,7 @@
   "oneShotWithFallbackExample": {
     "mode": "one-shot",
     "prompt": "Implement the feature end-to-end, but keep the backup path easy to swap if a provider is unavailable or too expensive right now.",
+    "useCase": "coding",
     "customImplementPrompt": "Keep changes narrowly scoped, prefer small reversible edits, and stop to report blockers instead of guessing.",
     "agents": ["claude", "codex", "gemini"],
     "roles": {
@@ -38,9 +40,9 @@
       "timeoutMs": 180000,
       "continueOnError": false,
       "writeScratchpad": true,
+      "planLoops": 3,
       "qualityLoops": 2,
-      "implementLoops": 2,
-      "implementLoopsPerUnit": 3,
+      "sectionImplementLoops": 2,
       "oneShotOrigins": {
         "plan": "gemini",
         "implement": "codex",
@@ -59,6 +61,7 @@
   "oneShotAggressiveContextSavingsExample": {
     "mode": "one-shot",
     "prompt": "Implement the feature end-to-end while minimizing repeated context cost across planning, implementation, and review steps.",
+    "useCase": "coding",
     "customImplementPrompt": "Prefer small reversible edits, keep the current unit self-contained, and report blockers instead of guessing.",
     "agents": ["claude", "codex", "gemini"],
     "context": {
@@ -73,9 +76,9 @@
       "timeoutMs": 180000,
       "continueOnError": false,
       "writeScratchpad": true,
+      "planLoops": 2,
       "qualityLoops": 2,
-      "implementLoops": 2,
-      "implementLoopsPerUnit": 2,
+      "sectionImplementLoops": 2,
       "oneShotOrigins": {
         "plan": "claude",
         "implement": "codex",

@@ -15,7 +15,7 @@ module.exports = async function registerOneShotTests(test) {
 
   await test('runOneShotUnitImplement fails fast when handoffData is missing', async () => {
     const orchestrator = new LoopiOrchestrator();
-    const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 2 } });
+    const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 2 } });
     const run = createRun(config);
 
     await assert.rejects(
@@ -31,7 +31,7 @@ module.exports = async function registerOneShotTests(test) {
 
   await test('runOneShotUnitImplement fails fast when units are empty', async () => {
     const orchestrator = new LoopiOrchestrator();
-    const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 2 } });
+    const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 2 } });
     const run = createRun(config);
 
     await assert.rejects(
@@ -47,7 +47,7 @@ module.exports = async function registerOneShotTests(test) {
 
   await test('runOneShotUnitImplement fails fast when units array is missing', async () => {
     const orchestrator = new LoopiOrchestrator();
-    const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 2 } });
+    const config = createConfig({ settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 2 } });
     const run = createRun(config);
 
     await assert.rejects(
@@ -65,7 +65,7 @@ module.exports = async function registerOneShotTests(test) {
     const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       agents: ['claude', 'codex'],
-      settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 1 }
+      settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 1 }
     });
     const run = createRun(config);
     const originalRunImplementLoopSequence = orchestrator.runImplementLoopSequence;
@@ -122,7 +122,7 @@ module.exports = async function registerOneShotTests(test) {
     const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       agents: ['claude', 'codex'],
-      settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 1 }
+      settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 1 }
     });
     const run = createRun(config);
     const originalRunImplementLoopSequence = orchestrator.runImplementLoopSequence;
@@ -187,11 +187,11 @@ module.exports = async function registerOneShotTests(test) {
     assert.strictEqual(capturedCalls[1].unitContext.id, 'commit-2');
   });
 
-  await test('runOneShotUnitImplement uses implementLoopsPerUnit for loop count', async () => {
+  await test('runOneShotUnitImplement uses sectionImplementLoops for loop count', async () => {
     const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       agents: ['claude', 'codex'],
-      settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 3 }
+      settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 3 }
     });
     const run = createRun(config);
     const originalRunImplementLoopSequence = orchestrator.runImplementLoopSequence;
@@ -237,7 +237,7 @@ module.exports = async function registerOneShotTests(test) {
     const config = createConfig({
       mode: 'one-shot',
       useCase: 'coding',
-      settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1, implementLoopsPerUnit: 2 }
+      settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1, planLoops: 1, sectionImplementLoops: 2 }
     });
     const run = createRun(config);
     const originalRunOneShotUnitImplement = orchestrator.runOneShotUnitImplement;
@@ -289,7 +289,7 @@ module.exports = async function registerOneShotTests(test) {
     const config = createConfig({
       mode: 'one-shot',
       useCase: 'coding',
-      settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 2, implementLoopsPerUnit: 1 }
+      settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 2, planLoops: 1, sectionImplementLoops: 1 }
     });
     const run = createRun(config);
     const originalRunOneShotUnitImplement = orchestrator.runOneShotUnitImplement;
@@ -340,12 +340,14 @@ module.exports = async function registerOneShotTests(test) {
     const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
+      useCase: 'coding',
       agents: ['claude', 'codex', 'gemini'],
       settings: {
         cwd: '.',
         timeoutMs: 10000,
         qualityLoops: 1,
-        implementLoopsPerUnit: 2,
+        planLoops: 1,
+        sectionImplementLoops: 2,
         oneShotOrigins: {
           implement: 'gemini',
           plan: 'claude'
@@ -398,7 +400,7 @@ module.exports = async function registerOneShotTests(test) {
       mode: 'one-shot',
       useCase: 'coding',
       agents: ['claude', 'codex'],
-      settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1, implementLoopsPerUnit: 1 }
+      settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1, planLoops: 1, sectionImplementLoops: 1 }
     });
     const run = createRun(config);
     const originalRunCollaborativeMode = orchestrator.runCollaborativeMode;
@@ -444,8 +446,9 @@ module.exports = async function registerOneShotTests(test) {
     const orchestrator = new LoopiOrchestrator();
     const config = createConfig({
       mode: 'one-shot',
+      useCase: 'coding',
       agents: ['claude', 'codex'],
-      settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 2 }
+      settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 2 }
     });
     const run = createRun(config);
 
@@ -477,7 +480,8 @@ module.exports = async function registerOneShotTests(test) {
         cwd: '.',
         timeoutMs: 10000,
         qualityLoops: 1,
-        implementLoopsPerUnit: 2,
+        planLoops: 1,
+        sectionImplementLoops: 2,
         oneShotOrigins: {
           implement: 'gemini'
         }
@@ -529,7 +533,7 @@ module.exports = async function registerOneShotTests(test) {
       mode: 'one-shot',
       useCase: 'coding',
       agents: ['claude', 'codex'],
-      settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1, implementLoopsPerUnit: 1 }
+      settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1, planLoops: 1, sectionImplementLoops: 1 }
     });
     const run = createRun(config);
     const originalRunCollaborativeMode = orchestrator.runCollaborativeMode;
@@ -577,7 +581,7 @@ module.exports = async function registerOneShotTests(test) {
     const config = createConfig({
       mode: 'one-shot',
       useCase: 'coding',
-      settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 1 }
+      settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 1 }
     });
     const run = createRun(config);
     const originalRunImplementLoopSequence = orchestrator.runImplementLoopSequence;
@@ -622,17 +626,12 @@ module.exports = async function registerOneShotTests(test) {
     assert.deepStrictEqual(capturedSchemas, ['implement-unit']);
   });
 
-  await test('runOneShotMode fails clearly when useCase is missing', async () => {
-    const orchestrator = new LoopiOrchestrator();
-    const config = createConfig({
-      mode: 'one-shot',
-      settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1, implementLoopsPerUnit: 1 }
-    });
-    const run = createRun(config);
-
-    await assert.rejects(
-      () => orchestrator.runOneShotMode(config, run),
-      /One-shot mode requires "useCase"/
-    );
+  await test('one-shot config fails clearly when useCase is missing', async () => {
+    assert.throws(() => {
+      createConfig({
+        mode: 'one-shot',
+        settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1, sectionImplementLoops: 1 }
+      });
+    }, /mode "one-shot" requires a non-empty "useCase"/);
   });
 };

@@ -8,6 +8,32 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function parseNdjsonLines(content, filePath, projectRoot) {
+  if (!content || String(content).trim() === '') {
+    return [];
+  }
+
+  const lines = String(content).split(/\r?\n/);
+  const records = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line || !line.trim()) {
+      continue;
+    }
+
+    try {
+      records.push(JSON.parse(line));
+    } catch (error) {
+      const relative = path.relative(projectRoot, filePath);
+      error.message = `Invalid NDJSON in ${relative} at line ${index + 1}: ${error.message}`;
+      throw error;
+    }
+  }
+
+  return records;
+}
+
 class CollaborationStore {
   constructor({ projectRoot } = {}) {
     this.projectRoot = taskPaths.getProjectRoot(projectRoot);
@@ -67,6 +93,22 @@ class CollaborationStore {
     return parsed;
   }
 
+  async listTaskIds() {
+    const tasksRoot = taskPaths.tasksRootDir(this.projectRoot);
+    try {
+      const entries = await fs.readdir(tasksRoot, { withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort((a, b) => b.localeCompare(a));
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        return [];
+      }
+      throw error;
+    }
+  }
+
   async appendStep(taskId, stepRecord) {
     await this.ensureTaskDirs(taskId);
     const stepsFile = taskPaths.stepsNdjsonPath(this.projectRoot, taskId);
@@ -75,6 +117,19 @@ class CollaborationStore {
       ...stepRecord
     }) + '\n';
     await fs.appendFile(stepsFile, line, 'utf8');
+  }
+
+  async readSteps(taskId) {
+    const stepsFile = taskPaths.stepsNdjsonPath(this.projectRoot, taskId);
+    try {
+      const content = await fs.readFile(stepsFile, 'utf8');
+      return parseNdjsonLines(content, stepsFile, this.projectRoot);
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        return [];
+      }
+      throw error;
+    }
   }
 
   async writeArtifact(taskId, artifact) {
@@ -153,4 +208,3 @@ class CollaborationStore {
 module.exports = {
   CollaborationStore
 };
-

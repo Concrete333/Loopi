@@ -520,7 +520,7 @@ function extractReviewFindingKeys(entry) {
 }
 
 class LoopiOrchestrator {
-  constructor({ projectRoot } = {}) {
+  constructor({ projectRoot, preassignedRunId = null, preassignedStartedAt = null } = {}) {
     this.projectRoot = taskPaths.getProjectRoot(projectRoot);
     this.sharedDir = taskPaths.sharedDir(this.projectRoot);
     this.taskFile = taskPaths.legacyTaskFile(this.projectRoot);
@@ -533,6 +533,9 @@ class LoopiOrchestrator {
     this._contextSelectionArtifactKeys = new Set();
     this._providerReadinessCache = {};
     this._artifactSeq = 0;
+    this.lastRun = null;
+    this.preassignedRunId = preassignedRunId;
+    this.preassignedStartedAt = preassignedStartedAt;
     this.buildContextIndex = buildContextIndex;
     this.checkProviderReadiness = checkProviderReadiness;
     this.collectPlanAnswers = collectPlanAnswers;
@@ -640,6 +643,7 @@ class LoopiOrchestrator {
     const config = normalizeTaskConfig(rawTask, { projectRoot: this.projectRoot });
 
     const run = this.createRun(config);
+    this.lastRun = run;
     this._artifactSeq = 0;
     await this.captureAndPersistWorktreeSnapshot({ run, scope: 'run-start' });
     await this.writeForkRecordIfPresent(run, config);
@@ -739,8 +743,11 @@ class LoopiOrchestrator {
     }
 
     if (pendingError) {
+      pendingError.run = run;
       throw pendingError;
     }
+
+    return run;
   }
 
   async getContextPackForPhase(config, phase, agentName = null, run = null, delivery = 'full', stageKey = null) {
@@ -1217,7 +1224,7 @@ class LoopiOrchestrator {
   }
 
   async runPlanMode(config, run) {
-    const totalLoops = config.settings.qualityLoops;
+    const totalLoops = config.settings.planLoops;
     let currentPlan = null;
     let currentHandoffText = null;
     let currentHandoffData = null;
@@ -1870,7 +1877,7 @@ class LoopiOrchestrator {
     }
 
     const units = handoffData.units;
-    const loopCount = config.settings.implementLoopsPerUnit;
+    const loopCount = config.settings.sectionImplementLoops;
 
     // Track state across units
     let finalOutput = null;
@@ -1971,17 +1978,26 @@ class LoopiOrchestrator {
             totalCycles: config.settings.qualityLoops
           });
 
-      const planResult = await this.runCollaborativeMode({
-        mode: 'plan',
-        prompt: planPrompt,
-        config,
-        run,
-        cycleNumber,
-        effectiveAgents: planAgents,
-        modeBuilderOptions: {
-          useCase: config.useCase || null
-        }
-      });
+      let planResult = null;
+      let currentPlanPrompt = planPrompt;
+      for (let planLoopNumber = 1; planLoopNumber <= config.settings.planLoops; planLoopNumber += 1) {
+        planResult = await this.runCollaborativeMode({
+          mode: 'plan',
+          prompt: currentPlanPrompt,
+          config,
+          run,
+          cycleNumber,
+          effectiveAgents: planAgents,
+          modeBuilderOptions: {
+            useCase: config.useCase || null
+          }
+        });
+
+        currentPlanPrompt = planResult.finalOutput
+          || renderHandoffForHumans(planResult.finalHandoffData)
+          || planResult.finalHandoffText
+          || currentPlanPrompt;
+      }
 
       // Retain structured handoff data as source of truth
       currentPlanHandoffData = planResult.finalHandoffData || null;
@@ -2348,9 +2364,9 @@ class LoopiOrchestrator {
   }
 
   createRun(config) {
-    const startedAt = new Date().toISOString();
+    const startedAt = this.preassignedStartedAt || new Date().toISOString();
     return {
-      runId: `run-${startedAt.replace(/[:.]/g, '-')}`,
+      runId: this.preassignedRunId || `run-${startedAt.replace(/[:.]/g, '-')}`,
       mode: config.mode,
       prompt: config.prompt,
       fork: config.fork || null,

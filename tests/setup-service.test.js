@@ -11,6 +11,9 @@ async function testGetAdapterMetadata() {
   assert.ok(claudeMeta.docsUrl);
   assert.ok(claudeMeta.installHint);
   assert.ok(claudeMeta.loginHint);
+  assert.strictEqual(claudeMeta.installCommand.type, 'npm-global');
+  assert.strictEqual(claudeMeta.installCommand.packageName, '@anthropic-ai/claude-cli');
+  assert.strictEqual(claudeMeta.loginCommand.shellCommand, 'claude auth login');
 
   const codexMeta = getAdapterMetadata('codex');
   assert.ok(codexMeta, 'codex metadata exists');
@@ -158,6 +161,160 @@ async function testGetAdapterDisplayStatus() {
   assert.ok(display.errorMessage);
 }
 
+async function testGetAdapterDisplayStatusIncludesMetadata() {
+  const { getAdapterDisplayStatus, getAdapterMetadata } = require('../src/setup-service');
+  const metadata = getAdapterMetadata('claude');
+
+  const display = await getAdapterDisplayStatus('claude', {
+    checkAdapterStatus: async () => ({
+      agentId: 'claude',
+      metadata,
+      status: 'missing',
+      ready: false,
+      error: 'Command not found',
+      nextAction: {
+        type: 'install',
+        command: metadata.installHint,
+        message: 'Install Claude Code'
+      },
+      resolvedPath: null
+    })
+  });
+
+  assert.ok(display.metadata, 'display metadata is included');
+  assert.strictEqual(display.metadata.installCommand.packageName, '@anthropic-ai/claude-cli');
+  assert.strictEqual(display.nextAction.type, 'install');
+}
+
+async function testRunAdapterInstallRequiresApproval() {
+  const { runAdapterInstall } = require('../src/setup-service');
+
+  const result = await runAdapterInstall('claude', { approved: false });
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.helperAvailable, true);
+  assert.strictEqual(result.approved, false);
+  assert.ok(result.error.includes('explicit approval'));
+}
+
+async function testRunAdapterInstallReturnsUnsupportedForManualInstallAgents() {
+  const { runAdapterInstall } = require('../src/setup-service');
+
+  const result = await runAdapterInstall('kilo', { approved: true });
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.helperAvailable, false);
+  assert.ok(result.error.includes('does not have a built-in install helper'));
+}
+
+async function testRunAdapterInstallExecutesAndRefreshesStatus() {
+  const { runAdapterInstall } = require('../src/setup-service');
+
+  let runnerCall = null;
+  let checkCallCount = 0;
+  const result = await runAdapterInstall('claude', {
+    approved: true,
+    cwd: 'C:\\Loopi',
+    commandRunner: async (invocation) => {
+      runnerCall = invocation;
+      return {
+        exitCode: 0,
+        stdout: 'installed',
+        stderr: ''
+      };
+    },
+    checkStatus: async () => {
+      checkCallCount += 1;
+      return {
+        agentId: 'claude',
+        status: 'installed_but_needs_login',
+        ready: false
+      };
+    }
+  });
+
+  assert.ok(runnerCall, 'install runner was called');
+  assert.ok(runnerCall.command === 'npm.cmd' || runnerCall.command === 'npm');
+  assert.deepStrictEqual(runnerCall.args.slice(0, 2), ['install', '-g']);
+  assert.strictEqual(checkCallCount, 1, 'status re-check runs after install');
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.statusAfter.status, 'installed_but_needs_login');
+}
+
+async function testRunAdapterLoginRequiresApproval() {
+  const { runAdapterLogin } = require('../src/setup-service');
+
+  const result = await runAdapterLogin('claude', { approved: false });
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.helperAvailable, true);
+  assert.strictEqual(result.approved, false);
+  assert.ok(result.error.includes('explicit approval'));
+}
+
+async function testRunAdapterLoginLaunchesAndRefreshesStatus() {
+  const { runAdapterLogin } = require('../src/setup-service');
+
+  let launchCall = null;
+  let checkCallCount = 0;
+  const result = await runAdapterLogin('codex', {
+    approved: true,
+    cwd: 'C:\\Loopi',
+    interactiveLauncher: async (invocation) => {
+      launchCall = invocation;
+      return {
+        exitCode: 0,
+        stdout: '',
+        stderr: ''
+      };
+    },
+    checkStatus: async () => {
+      checkCallCount += 1;
+      return {
+        agentId: 'codex',
+        status: 'ready',
+        ready: true
+      };
+    }
+  });
+
+  assert.ok(launchCall, 'login launcher was called');
+  assert.strictEqual(launchCall.command, 'codex');
+  assert.deepStrictEqual(launchCall.args, ['auth', 'login']);
+  assert.strictEqual(launchCall.shellCommand, 'codex auth login');
+  assert.strictEqual(checkCallCount, 1, 'status re-check runs after login');
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.statusAfter.status, 'ready');
+}
+
+async function testRunAdapterLoginRequiresReadyStatusAfterSuccessfulLaunch() {
+  const { runAdapterLogin } = require('../src/setup-service');
+
+  const result = await runAdapterLogin('codex', {
+    approved: true,
+    cwd: 'C:\\Loopi',
+    interactiveLauncher: async () => ({
+      exitCode: 0,
+      stdout: '',
+      stderr: ''
+    }),
+    checkStatus: async () => ({
+      agentId: 'codex',
+      status: 'installed_but_needs_login',
+      ready: false
+    })
+  });
+
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.message, 'Codex CLI login window closed, but the adapter is still not ready.');
+  assert.ok(String(result.error).includes('still not ready'));
+}
+
+async function testBuildWindowsInteractiveLaunchScriptPropagatesChildExitCode() {
+  const { __test } = require('../src/setup-service');
+
+  const script = __test.buildWindowsInteractiveLaunchScript('codex auth login', 'C:\\Loopi');
+  assert.ok(script.includes('-Wait -PassThru'));
+  assert.ok(script.includes('exit $process.ExitCode'));
+}
+
 async function testGetAllAdapterDisplayStatus() {
   const { getAllAdapterDisplayStatus } = require('../src/setup-service');
 
@@ -222,8 +379,32 @@ async function main() {
   await testGetAdapterDisplayStatus();
   console.log('  [PASS] getAdapterDisplayStatus returns display-friendly status');
 
+  await testGetAdapterDisplayStatusIncludesMetadata();
+  console.log('  [PASS] getAdapterDisplayStatus includes metadata for helper-driven UI actions');
+
   await testGetAllAdapterDisplayStatus();
   console.log('  [PASS] getAllAdapterDisplayStatus returns all display statuses');
+
+  await testRunAdapterInstallRequiresApproval();
+  console.log('  [PASS] runAdapterInstall requires explicit approval');
+
+  await testRunAdapterInstallReturnsUnsupportedForManualInstallAgents();
+  console.log('  [PASS] runAdapterInstall reports unsupported helpers for manual-only agents');
+
+  await testRunAdapterInstallExecutesAndRefreshesStatus();
+  console.log('  [PASS] runAdapterInstall executes the helper and refreshes status');
+
+  await testRunAdapterLoginRequiresApproval();
+  console.log('  [PASS] runAdapterLogin requires explicit approval');
+
+  await testRunAdapterLoginLaunchesAndRefreshesStatus();
+  console.log('  [PASS] runAdapterLogin launches the helper and refreshes status');
+
+  await testRunAdapterLoginRequiresReadyStatusAfterSuccessfulLaunch();
+  console.log('  [PASS] runAdapterLogin only succeeds when the adapter is actually ready afterward');
+
+  await testBuildWindowsInteractiveLaunchScriptPropagatesChildExitCode();
+  console.log('  [PASS] Windows login launcher script propagates the child process exit code');
 
   console.log('setup-service: all tests passed');
 }

@@ -4,6 +4,8 @@ Most users should stay in the CLI flow.
 
 If you prefer manual configuration, or want to inspect and tweak the generated config directly, you can edit `shared/task.json` before running.
 
+Validation happens when Loopi loads the file. If `shared/task.json` is malformed or contains invalid config values, the CLI will fail early and the local UI will show the saved file as invalid instead of replacing it with defaults. In the UI, save, validate, and run actions stay blocked until you either fix the file or explicitly choose `Start New Draft` and replace it.
+
 ## Minimum Example
 
 ```json
@@ -23,12 +25,15 @@ If you prefer manual configuration, or want to inspect and tweak the generated c
 
 - `mode` currently supports `plan`, `implement`, `review`, and `one-shot`.
 - `agents` is an ordered list. The first agent is the origin for that mode's role and the final synthesizer.
+- `useCase` is an optional top-level field for `plan` mode and a required top-level field for `one-shot` mode. It loads a structured use-case config from `config/use-cases/*.json`.
 - `reviewPrompt` and `synthesisPrompt` are optional top-level prompt overrides for `plan` mode only.
 - `customImplementPrompt` is an optional top-level guidance block for `implement` and `one-shot`. It is threaded through initial implement and repair prompts.
 - `settings.timeoutMs` applies to each agent step.
-- `settings.qualityLoops` is used by `one-shot` mode and defaults to `1`.
+- `settings.planLoops` controls the number of plan-review-synthesis cycles for `plan` mode, and the number of plan cycles within each quality loop for `one-shot` mode. Defaults to `1`, with fallback to `qualityLoops` for backward compatibility.
+- `settings.qualityLoops` is used by `one-shot` mode for total outer reruns of the entire sequence. Defaults to `1`.
+- `settings.sectionImplementLoops` controls per-section implement-review-repair cycles in one-shot mode. This is the canonical name for this setting. The deprecated alias `implementLoopsPerUnit` is still accepted for backward compatibility. Falls back to `implementLoopsPerUnit` → `implementLoops` → `planLoops` → `qualityLoops` → `1`.
 - `settings.implementLoops` controls standalone iterative `implement` mode. It falls back to `qualityLoops`, then `1`.
-- `settings.implementLoopsPerUnit` controls one-shot implement loops per plan unit. It falls back to `implementLoops`, then `qualityLoops`, then `1`.
+- `settings.implementLoopsPerUnit` is deprecated. Use `settings.sectionImplementLoops` instead. Still accepted as a fallback alias for backward compatibility.
 - `settings.agentPolicies` controls per-agent write permissions.
 - `fork` is an optional top-level lineage block for manually forked retries.
 - `plan` and `review` use compact machine-readable handoffs internally, with non-fatal fallback to prose when a handoff block is missing or malformed.
@@ -157,7 +162,7 @@ Rules:
 - Each origin agent must be present in the top-level `agents` list.
 - Missing entries fall back to the first agent in `agents`.
 - Write access in the implement sub-run follows the implement origin.
-- One-shot implement loops run per structured plan unit using `settings.implementLoopsPerUnit`.
+- One-shot implement loops run per structured plan section using `settings.sectionImplementLoops`.
 
 See `shared/task.example.json` for a complete example.
 

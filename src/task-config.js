@@ -59,9 +59,10 @@ function normalizeTaskConfig(rawTask, { projectRoot }) {
       timeoutMs: normalizeTimeout(rawTask),
       continueOnError: Boolean(rawTask.settings && rawTask.settings.continueOnError),
       writeScratchpad: rawTask.settings ? rawTask.settings.writeScratchpad !== false : true,
+      planLoops: normalizePlanLoops(rawTask),
       qualityLoops: normalizeQualityLoops(rawTask),
       implementLoops: normalizeImplementLoops(rawTask),
-      implementLoopsPerUnit: normalizeImplementLoopsPerUnit(rawTask),
+      sectionImplementLoops: normalizeSectionImplementLoops(rawTask),
       agentPolicies: normalizeAgentPolicies(rawTask, executionTargets),
       agentOptions: normalizeAgentOptions(rawTask, executionTargets),
       oneShotOrigins
@@ -239,6 +240,9 @@ function normalizeUseCase(rawTask, mode, projectRoot) {
   const rawUseCase = rawTask.useCase;
 
   if (rawUseCase === undefined || rawUseCase === null) {
+    if (mode === 'one-shot') {
+      throw new Error('mode "one-shot" requires a non-empty "useCase".');
+    }
     return null;
   }
 
@@ -409,8 +413,8 @@ function normalizeImplementLoops(rawTask) {
   return parsed;
 }
 
-// Normalizes implementLoopsPerUnit for one-shot implement stage.
-// Fallback chain: implementLoopsPerUnit → implementLoops → qualityLoops → 1
+// Normalizes deprecated implementLoopsPerUnit input for one-shot implement stage.
+// Deprecated alias fallback chain: implementLoopsPerUnit → implementLoops → qualityLoops → 1
 function normalizeImplementLoopsPerUnit(rawTask) {
   const rawSettings = rawTask.settings || {};
   if (rawSettings.implementLoopsPerUnit === undefined) {
@@ -424,6 +428,55 @@ function normalizeImplementLoopsPerUnit(rawTask) {
   const parsed = Number(rawSettings.implementLoopsPerUnit);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error('settings.implementLoopsPerUnit must be a positive integer.');
+  }
+
+  return parsed;
+}
+
+// Normalizes planLoops for plan and one-shot modes.
+// planLoops controls the number of plan cycles within each qualityLoops pass for one-shot,
+// or directly for plan mode. When absent, falls back to qualityLoops.
+function normalizePlanLoops(rawTask) {
+  const rawSettings = rawTask.settings || {};
+  if (rawSettings.planLoops === undefined) {
+    // Fallback to qualityLoops, then default 1
+    return rawSettings.qualityLoops !== undefined ? normalizeQualityLoops(rawTask) : 1;
+  }
+
+  const parsed = Number(rawSettings.planLoops);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('settings.planLoops must be a positive integer.');
+  }
+
+  return parsed;
+}
+
+// Normalizes sectionImplementLoops for one-shot implement stage.
+// This is the new canonical name for per-section implement/review/repair cycles.
+// Deprecated alias: implementLoopsPerUnit
+// Fallback chain: sectionImplementLoops → implementLoopsPerUnit → implementLoops → planLoops → legacy qualityLoops via planLoops → 1
+function normalizeSectionImplementLoops(rawTask) {
+  const rawSettings = rawTask.settings || {};
+  if (rawSettings.sectionImplementLoops === undefined) {
+    // Try deprecated alias first
+    if (rawSettings.implementLoopsPerUnit !== undefined) {
+      return normalizeImplementLoopsPerUnit(rawTask);
+    }
+    // Then try implementLoops
+    if (rawSettings.implementLoops !== undefined) {
+      return normalizeImplementLoops(rawTask);
+    }
+    // Then try planLoops, including the legacy qualityLoops -> planLoops fallback.
+    if (rawSettings.planLoops !== undefined || rawSettings.qualityLoops !== undefined) {
+      return normalizePlanLoops(rawTask);
+    }
+    // Finally default to 1
+    return 1;
+  }
+
+  const parsed = Number(rawSettings.sectionImplementLoops);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('settings.sectionImplementLoops must be a positive integer.');
   }
 
   return parsed;

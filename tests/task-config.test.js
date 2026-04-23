@@ -81,6 +81,7 @@ test('customImplementPrompt accepted for implement mode, trimmed', () => {
 test('customImplementPrompt accepted for one-shot mode, trimmed', () => {
   const config = normalizeTaskConfig(baseTask({
     mode: 'one-shot',
+    useCase: 'coding',
     customImplementPrompt: '  Favor small commits  '
   }), { projectRoot: PROJECT_ROOT });
 
@@ -125,7 +126,7 @@ test('customImplementPrompt rejected when empty string', () => {
 
 test('customImplementPrompt rejected when non-string', () => {
   assert.throws(() => {
-    normalizeTaskConfig(baseTask({ mode: 'one-shot', customImplementPrompt: {} }), { projectRoot: PROJECT_ROOT });
+    normalizeTaskConfig(baseTask({ mode: 'one-shot', useCase: 'coding', customImplementPrompt: {} }), { projectRoot: PROJECT_ROOT });
   }, /"customImplementPrompt" must be a non-empty string/);
 });
 
@@ -216,7 +217,7 @@ test('unknown useCase name throws', () => {
   }, /Available use cases:/);
 });
 
-console.log('\ntask-config: implementLoops and implementLoopsPerUnit');
+console.log('\ntask-config: implementLoops, planLoops, and sectionImplementLoops');
 
 test('implementLoops defaults to qualityLoops when not set', () => {
   const config = normalizeTaskConfig(baseTask({
@@ -270,35 +271,44 @@ test('implementLoops rejects non-integer', () => {
   }, /settings.implementLoops must be a positive integer/);
 });
 
-test('implementLoopsPerUnit defaults to implementLoops when not set', () => {
+test('one-shot mode requires useCase at config load time', () => {
+  assert.throws(() => {
+    normalizeTaskConfig(baseTask({
+      mode: 'one-shot',
+      settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1 }
+    }), { projectRoot: PROJECT_ROOT });
+  }, /mode "one-shot" requires a non-empty "useCase"/);
+});
+
+test('sectionImplementLoops defaults to implementLoops when not set', () => {
   const config = normalizeTaskConfig(baseTask({
     settings: { cwd: '.', timeoutMs: 10000, implementLoops: 4 }
   }), { projectRoot: PROJECT_ROOT });
-  assert.strictEqual(config.settings.implementLoopsPerUnit, 4);
+  assert.strictEqual(config.settings.sectionImplementLoops, 4);
 });
 
-test('implementLoopsPerUnit defaults to qualityLoops when neither implementLoops nor implementLoopsPerUnit is set', () => {
+test('sectionImplementLoops defaults to qualityLoops via legacy planLoops fallback when no other loop values are set', () => {
   const config = normalizeTaskConfig(baseTask({
     settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 3 }
   }), { projectRoot: PROJECT_ROOT });
-  assert.strictEqual(config.settings.implementLoopsPerUnit, 3);
+  assert.strictEqual(config.settings.sectionImplementLoops, 3);
 });
 
-test('implementLoopsPerUnit defaults to 1 when nothing is set', () => {
+test('sectionImplementLoops defaults to 1 when nothing is set', () => {
   const config = normalizeTaskConfig(baseTask({
     settings: { cwd: '.', timeoutMs: 10000 }
   }), { projectRoot: PROJECT_ROOT });
-  assert.strictEqual(config.settings.implementLoopsPerUnit, 1);
+  assert.strictEqual(config.settings.sectionImplementLoops, 1);
 });
 
-test('implementLoopsPerUnit uses explicit value when set', () => {
+test('sectionImplementLoops uses deprecated implementLoopsPerUnit input when set', () => {
   const config = normalizeTaskConfig(baseTask({
     settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 2, implementLoops: 5, qualityLoops: 3 }
   }), { projectRoot: PROJECT_ROOT });
-  assert.strictEqual(config.settings.implementLoopsPerUnit, 2);
+  assert.strictEqual(config.settings.sectionImplementLoops, 2);
 });
 
-test('implementLoopsPerUnit rejects zero', () => {
+test('deprecated implementLoopsPerUnit rejects zero through sectionImplementLoops normalization', () => {
   assert.throws(() => {
     normalizeTaskConfig(baseTask({
       settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 0 }
@@ -306,7 +316,7 @@ test('implementLoopsPerUnit rejects zero', () => {
   }, /settings.implementLoopsPerUnit must be a positive integer/);
 });
 
-test('implementLoopsPerUnit rejects negative', () => {
+test('deprecated implementLoopsPerUnit rejects negative through sectionImplementLoops normalization', () => {
   assert.throws(() => {
     normalizeTaskConfig(baseTask({
       settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: -2 }
@@ -314,7 +324,7 @@ test('implementLoopsPerUnit rejects negative', () => {
   }, /settings.implementLoopsPerUnit must be a positive integer/);
 });
 
-test('implementLoopsPerUnit rejects non-integer', () => {
+test('deprecated implementLoopsPerUnit rejects non-integer through sectionImplementLoops normalization', () => {
   assert.throws(() => {
     normalizeTaskConfig(baseTask({
       settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 1.5 }
@@ -338,7 +348,7 @@ test('qualityLoops: 0 propagates error through implementLoops fallback', () => {
   }, /settings.qualityLoops must be a positive integer/);
 });
 
-test('qualityLoops: 0 propagates error through implementLoopsPerUnit fallback', () => {
+test('qualityLoops: 0 propagates error through sectionImplementLoops fallback', () => {
   assert.throws(() => {
     normalizeTaskConfig(baseTask({
       settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 0 }
@@ -1027,6 +1037,7 @@ test('Configured provider IDs are allowed in the agents list', () => {
 test('oneShotOrigins can reference configured provider IDs present in agents list', () => {
   const config = normalizeTaskConfig(baseTask({
     mode: 'one-shot',
+    useCase: 'coding',
     agents: ['claude', 'nim-local'],
     providers: {
       'nim-local': {
@@ -1241,6 +1252,197 @@ test('Unknown provider name in roles fails validation', () => {
       }
     }), { projectRoot: PROJECT_ROOT });
   }, /roles\.planner references unknown provider\/agent/i);
+});
+
+console.log('\ntask-config: Phase 2A loop normalization (planLoops, sectionImplementLoops)');
+
+test('planLoops uses explicit value when set', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, planLoops: 5 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.planLoops, 5);
+});
+
+test('planLoops falls back to qualityLoops when not set', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 3 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.planLoops, 3);
+});
+
+test('planLoops defaults to 1 when neither planLoops nor qualityLoops is set', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.planLoops, 1);
+});
+
+test('planLoops ignores qualityLoops when explicit planLoops is set', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 2, planLoops: 4 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.planLoops, 4);
+});
+
+test('planLoops rejects zero', () => {
+  assert.throws(() => {
+    normalizeTaskConfig(baseTask({
+      settings: { cwd: '.', timeoutMs: 10000, planLoops: 0 }
+    }), { projectRoot: PROJECT_ROOT });
+  }, /settings\.planLoops must be a positive integer/);
+});
+
+test('planLoops rejects negative', () => {
+  assert.throws(() => {
+    normalizeTaskConfig(baseTask({
+      settings: { cwd: '.', timeoutMs: 10000, planLoops: -1 }
+    }), { projectRoot: PROJECT_ROOT });
+  }, /settings\.planLoops must be a positive integer/);
+});
+
+test('planLoops rejects non-integer', () => {
+  assert.throws(() => {
+    normalizeTaskConfig(baseTask({
+      settings: { cwd: '.', timeoutMs: 10000, planLoops: 2.5 }
+    }), { projectRoot: PROJECT_ROOT });
+  }, /settings\.planLoops must be a positive integer/);
+});
+
+test('sectionImplementLoops uses explicit value when set', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 3 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.sectionImplementLoops, 3);
+});
+
+test('sectionImplementLoops falls back to deprecated implementLoopsPerUnit when not set', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 2 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.sectionImplementLoops, 2);
+});
+
+test('sectionImplementLoops falls back to implementLoops when neither sectionImplementLoops nor implementLoopsPerUnit is set', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, implementLoops: 4 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.sectionImplementLoops, 4);
+});
+
+test('sectionImplementLoops falls back to planLoops when implementLoopsPerUnit and implementLoops are not set', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, planLoops: 2 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.sectionImplementLoops, 2);
+});
+
+test('sectionImplementLoops falls back to qualityLoops when other loop values are not set', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 3 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.sectionImplementLoops, 3);
+});
+
+test('sectionImplementLoops defaults to 1 when no loop values are set', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.sectionImplementLoops, 1);
+});
+
+test('sectionImplementLoops prefers explicit value over all fallbacks', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 5, implementLoopsPerUnit: 2, implementLoops: 3, planLoops: 4, qualityLoops: 1 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.sectionImplementLoops, 5);
+});
+
+test('sectionImplementLoops respects fallback chain: sectionImplementLoops -> implementLoopsPerUnit -> implementLoops -> planLoops -> qualityLoops -> 1', () => {
+  // Only qualityLoops set
+  const config1 = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 2 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config1.settings.sectionImplementLoops, 2);
+
+  // qualityLoops and planLoops set
+  const config2 = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 2, planLoops: 3 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config2.settings.sectionImplementLoops, 3);
+
+  // qualityLoops, planLoops, and implementLoops set
+  const config3 = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 2, planLoops: 3, implementLoops: 4 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config3.settings.sectionImplementLoops, 4);
+
+  // qualityLoops, planLoops, implementLoops, and implementLoopsPerUnit set
+  const config4 = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 2, planLoops: 3, implementLoops: 4, implementLoopsPerUnit: 5 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config4.settings.sectionImplementLoops, 5);
+});
+
+test('sectionImplementLoops rejects zero', () => {
+  assert.throws(() => {
+    normalizeTaskConfig(baseTask({
+      settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 0 }
+    }), { projectRoot: PROJECT_ROOT });
+  }, /settings\.sectionImplementLoops must be a positive integer/);
+});
+
+test('sectionImplementLoops rejects negative', () => {
+  assert.throws(() => {
+    normalizeTaskConfig(baseTask({
+      settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: -2 }
+    }), { projectRoot: PROJECT_ROOT });
+  }, /settings\.sectionImplementLoops must be a positive integer/);
+});
+
+test('sectionImplementLoops rejects non-integer', () => {
+  assert.throws(() => {
+    normalizeTaskConfig(baseTask({
+      settings: { cwd: '.', timeoutMs: 10000, sectionImplementLoops: 1.5 }
+    }), { projectRoot: PROJECT_ROOT });
+  }, /settings\.sectionImplementLoops must be a positive integer/);
+});
+
+test('qualityLoops remains separate from planLoops for one-shot mode', () => {
+  const config = normalizeTaskConfig(baseTask({
+    mode: 'one-shot',
+    useCase: 'coding',
+    settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 2, planLoops: 4, sectionImplementLoops: 3 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.qualityLoops, 2);
+  assert.strictEqual(config.settings.planLoops, 4);
+  assert.strictEqual(config.settings.sectionImplementLoops, 3);
+});
+
+test('one-shot config with all three loop controls normalizes correctly', () => {
+  const config = normalizeTaskConfig(baseTask({
+    mode: 'one-shot',
+    useCase: 'coding',
+    settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 2, planLoops: 4, sectionImplementLoops: 3 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.qualityLoops, 2);
+  assert.strictEqual(config.settings.planLoops, 4);
+  assert.strictEqual(config.settings.sectionImplementLoops, 3);
+});
+
+test('deprecated implementLoopsPerUnit is still accepted and normalized', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, implementLoopsPerUnit: 3 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.sectionImplementLoops, 3);
+  assert.ok(!Object.prototype.hasOwnProperty.call(config.settings, 'implementLoopsPerUnit'));
+});
+
+test('deprecated qualityLoops as planLoops source works for backward compatibility', () => {
+  const config = normalizeTaskConfig(baseTask({
+    settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 3 }
+  }), { projectRoot: PROJECT_ROOT });
+  assert.strictEqual(config.settings.planLoops, 3);
+  assert.strictEqual(config.settings.qualityLoops, 3);
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);

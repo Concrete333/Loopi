@@ -118,12 +118,13 @@ module.exports = async function registerReadinessTests(test) {
   test('HTTP provider as one-shot implement origin throws descriptive error', () => {
     const config = createConfig({
       mode: 'one-shot',
+      useCase: 'coding',
       agents: ['claude', 'nim-local'],
       settings: {
         cwd: '.',
         timeoutMs: 10000,
         qualityLoops: 1,
-        implementLoopsPerUnit: 1,
+        sectionImplementLoops: 1,
         oneShotOrigins: {
           implement: 'nim-local'
         }
@@ -164,12 +165,13 @@ module.exports = async function registerReadinessTests(test) {
   test('HTTP provider as one-shot reviewer does not throw', () => {
     const config = createConfig({
       mode: 'one-shot',
+      useCase: 'coding',
       agents: ['claude', 'nim-local'],
       settings: {
         cwd: '.',
         timeoutMs: 10000,
         qualityLoops: 1,
-        implementLoopsPerUnit: 1,
+        sectionImplementLoops: 1,
         oneShotOrigins: {
           review: 'nim-local'
         }

@@ -195,6 +195,48 @@ test('writeTask handles valid existing task JSON', async () => {
   await cleanupTask('test-valid-json');
 });
 
+console.log('\ncollaboration-store: run browsing helpers');
+
+test('listTaskIds returns task directories in descending order', async () => {
+  await cleanupTask('test-list-001');
+  await cleanupTask('test-list-002');
+
+  const store = new CollaborationStore({ projectRoot: PROJECT_ROOT });
+  const startedAt = new Date().toISOString();
+  await store.writeTask('test-list-001', { mode: 'plan', prompt: 'one', agents: ['claude'], startedAt });
+  await store.writeTask('test-list-002', { mode: 'plan', prompt: 'two', agents: ['claude'], startedAt });
+
+  const taskIds = await store.listTaskIds();
+  assert.ok(taskIds.includes('test-list-001'));
+  assert.ok(taskIds.includes('test-list-002'));
+  assert.ok(taskIds.indexOf('test-list-002') < taskIds.indexOf('test-list-001'));
+
+  await cleanupTask('test-list-001');
+  await cleanupTask('test-list-002');
+});
+
+test('readSteps returns parsed step records and [] when steps file is missing', async () => {
+  await cleanupTask('test-read-steps');
+
+  const store = new CollaborationStore({ projectRoot: PROJECT_ROOT });
+  const missing = await store.readSteps('test-read-steps');
+  assert.deepStrictEqual(missing, []);
+
+  await store.appendStep('test-read-steps', {
+    id: 'plan-1',
+    stage: 'plan',
+    agent: 'claude',
+    ok: true
+  });
+
+  const steps = await store.readSteps('test-read-steps');
+  assert.strictEqual(steps.length, 1);
+  assert.strictEqual(steps[0].id, 'plan-1');
+  assert.strictEqual(steps[0].stage, 'plan');
+
+  await cleanupTask('test-read-steps');
+});
+
 // Run all async tests and exit when done
 // Note: Tests are already running via the async function wrapper above
 // We just need to ensure we don't exit too early

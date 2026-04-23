@@ -2,6 +2,15 @@
 
 The CLI is the primary way to use Loopi.
 
+If you prefer a browser-based control plane for setup, settings, task composition, and run monitoring, you can launch the local UI instead:
+
+```bash
+npm run ui
+```
+
+The UI runs locally on `http://127.0.0.1:3030` by default and uses the same validated backend services as the CLI.
+It also surfaces invalid saved task files explicitly instead of masking them with defaults, and its Runs tab shows live background sessions while a task is still running.
+
 ## Beginner CLI
 
 Use the wrapper CLI when you want the normal Loopi workflow without editing JSON by hand:
@@ -38,6 +47,11 @@ Notes:
 
 - The `--` is required so `npm run` forwards the command name to the CLI.
 - `plan`, `review`, `implement`, and `oneshot` launch a short interactive wizard, write `shared/task.json`, and can immediately run the task for you.
+- The wizard prompts for `useCase` in `plan` and `one-shot` modes, allowing you to select from available use-case templates in `config/use-cases/*.json`.
+- The wizard prompts for loop settings based on mode:
+  - `plan`: prompts for `Plan loops` (plan-review-synthesis cycles)
+  - `one-shot`: prompts for `Use case`, `Plan loops`, `Section implementation loops`, and `Quality loops`
+  - `implement`: prompts for `Implementation loops` (implement-review-repair cycles)
 - `new --advanced` launches the opt-in advanced wizard for users who want a few extra configuration options without editing JSON directly.
 - The beginner commands intentionally write minimal configs so the generated `shared/task.json` stays readable if you later open or edit it by hand.
 - `run` executes the current `shared/task.json` without reopening the wizard.

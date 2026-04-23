@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loopi Control Plane</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div class="hero__copy">
+        <p class="hero__eyebrow">Loopi Control Plane</p>
+        <h1>Shape tasks, inspect setup, and monitor runs without touching JSON by hand.</h1>
+        <p class="hero__lede">
+          This local UI stays anchored to the backend service layer, so validation, presets, provider testing,
+          and run history all come from the same code the CLI uses.
+        </p>
+      </div>
+      <div class="hero__panel" id="hero-summary"></div>
+    </header>
+
+    <div class="toolbar">
+      <div class="toolbar__tabs">
+        <button class="tab-button is-active" data-tab="setup">Setup</button>
+        <button class="tab-button" data-tab="settings">Settings</button>
+        <button class="tab-button" data-tab="composer">Task Composer</button>
+        <button class="tab-button" data-tab="runs">Run Dashboard</button>
+      </div>
+      <label class="view-toggle">
+        <input id="advanced-toggle" type="checkbox">
+        <span>Advanced view</span>
+      </label>
+    </div>
+
+    <main class="panels">
+      <section id="tab-setup" class="panel is-active"></section>
+      <section id="tab-settings" class="panel"></section>
+      <section id="tab-composer" class="panel"></section>
+      <section id="tab-runs" class="panel"></section>
+    </main>
+  </div>
+
+  <template id="empty-state-template">
+    <div class="empty-state">
+      <h3>Nothing here yet</h3>
+      <p></p>
+    </div>
+  </template>
+
+  <script src="/ui-core.js"></script>
+  <script src="/ui-render.js"></script>
+  <script src="/ui-state.js"></script>
+  <script src="/ui-actions.js"></script>
+  <script src="/ui-bindings.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

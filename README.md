@@ -65,9 +65,10 @@ Loopi exposes three independent loop controls:
 
 | Setting | Used by | What it controls |
 | --- | --- | --- |
-| `qualityLoops` | `plan`, `one-shot` | outer quality cycles |
-| `implementLoops` | `implement`, `one-shot` | implement -> review -> repair cycles |
-| `implementLoopsPerUnit` | `one-shot` | per-unit implement/review/repair cycles |
+| `planLoops` | `plan`, `one-shot` | plan-review-synthesis cycles (for plan mode) or plan cycles per quality loop (for one-shot) |
+| `qualityLoops` | `one-shot` | total outer one-shot reruns of the entire sequence |
+| `sectionImplementLoops` | `one-shot` | per-section implement-review-repair cycles |
+| `implementLoops` | `implement` | standalone implement -> review -> repair cycles |
 
 Those controls let you do things like:
 
@@ -194,7 +195,7 @@ HTTP providers are always **read-only** in Loopi today. They can plan, review, a
 
 ## Quick Start
 
-After you install at least one agent CLI, validate your setup:
+After you install at least one agent CLI, validate your setup. This works even before `shared/task.json` exists:
 
 ```powershell
 npm run cli -- doctor
@@ -205,6 +206,14 @@ Then generate your first task interactively:
 ```powershell
 npm run cli -- plan
 ```
+
+If you prefer a browser-based setup flow, launch the local UI:
+
+```powershell
+npm run ui
+```
+
+That starts a localhost control plane for setup checks, task configuration, presets, and run monitoring. The UI now treats broken saved task files as first-class errors instead of hiding them, the Runs tab shows live background sessions while a run is still in flight, and the Setup tab can launch explicit install/login helpers for supported adapters. See [docs/ui.md](docs/ui.md) for the screen-by-screen guide.
 
 Typical flow:
 
@@ -229,18 +238,20 @@ That is usually enough to feel why the workflow matters.
 
 ## Modes
 
-| Mode | Flow | Primary loop setting |
+| Mode | Flow | Primary loop settings |
 | --- | --- | --- |
-| `plan` | initial plan -> review(s) -> synthesis | `qualityLoops` |
+| `plan` | initial plan -> review(s) -> synthesis | `planLoops` |
 | `implement` | implement -> review(s) -> repair | `implementLoops` |
 | `review` | initial review -> parallel reviews -> synthesis | (single pass by design) |
-| `one-shot` | plan -> per-unit implement/review -> replan | `qualityLoops` + `implementLoopsPerUnit` |
+| `one-shot` | plan -> per-unit implement/review -> replan | `qualityLoops`, `planLoops`, `sectionImplementLoops` |
 
-For example, one-shot with `qualityLoops = 3` becomes:
+For example, one-shot with `qualityLoops = 2`, `planLoops = 2`, `sectionImplementLoops = 1` becomes:
 
 ```text
-plan -> implement -> review -> plan -> implement -> review -> plan -> implement
+[plan x 2] -> [implement each section x 1] -> [plan x 2] -> [implement each section x 1]
 ```
+
+With 3 planned sections, that is 4 total plan cycles and 6 total section implementations.
 
 The important point is not just that Loopi has different modes. It is that each mode exposes a different kind of refinement loop, and you decide how much quality pressure and token spend a task deserves.
 
@@ -267,9 +278,39 @@ Loopi exposes separate loop controls because different tasks need different kind
 
 | Setting | Used by | What it controls |
 | --- | --- | --- |
-| `qualityLoops` | `plan`, `one-shot` | outer quality cycles |
-| `implementLoops` | `implement`, `one-shot` | implement -> review -> repair cycles |
-| `implementLoopsPerUnit` | `one-shot` | per-unit implement/review/repair cycles |
+| `planLoops` | `plan`, `one-shot` | plan-review-synthesis cycles (for plan mode) or plan cycles per quality loop (for one-shot) |
+| `qualityLoops` | `one-shot` | total outer one-shot reruns of the entire sequence |
+| `sectionImplementLoops` | `one-shot` | per-section implement-review-repair cycles |
+| `implementLoops` | `implement` | standalone implement -> review -> repair cycles |
+
+### One-Shot Loop Nesting
+
+In `one-shot` mode, the loop controls nest as follows:
+
+1. For each outer `qualityLoops` cycle, run the plan stage `planLoops` times.
+2. After the final plan result for that outer cycle is ready, implement each planned section.
+3. For each section, run the implement-review-repair loop `sectionImplementLoops` times.
+4. If there is another outer `qualityLoops` cycle remaining, rerun the full sequence again using the one-shot replan flow.
+
+**Worked example:**
+
+```json
+{
+  "mode": "one-shot",
+  "useCase": "academic-paper",
+  "prompt": "Write a research paper on AI safety",
+  "agents": ["claude", "codex", "gemini"],
+  "settings": {
+    "planLoops": 4,
+    "qualityLoops": 2,
+    "sectionImplementLoops": 2
+  }
+}
+```
+
+If the plan has 3 sections, this configuration means:
+- `8` total plan cycles (4 plan loops × 2 quality loops)
+- `12` total section implementation cycles (3 sections × 2 section loops × 2 quality loops)
 
 That means you can do things like:
 
@@ -352,7 +393,7 @@ See [LICENSE](./LICENSE) for the full license text and [LICENSING.md](./LICENSIN
 
 ## Troubleshooting
 
-- Run `npm run cli -- doctor` first. It validates the current task configuration and checks that the selected CLI agents appear usable.
+- Run `npm run cli -- doctor` first. Without a task file it performs an environment/setup check; with `shared/task.json` present it also validates the task configuration and selected agents.
 - If an agent is installed but not detected, set the matching `LOOPI_*` override.
 - To find an installed CLI path on Windows, use `where.exe claude`, `where.exe codex`, `where.exe gemini`, and so on.
 - On macOS or Linux, use `which claude`, `which codex`, `which gemini`, and so on.

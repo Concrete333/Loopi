@@ -11,6 +11,7 @@
     "cli:review": "node src/cli.js review",
     "cli:implement": "node src/cli.js implement",
     "cli:oneshot": "node src/cli.js oneshot",
+    "ui": "node src/control-plane/server.js",
     "build:pack": "powershell -ExecutionPolicy Bypass -File scripts/build-pack.ps1",
     "build:pack:verify": "powershell -ExecutionPolicy Bypass -File scripts/build-pack.ps1 -Verify",
     "test": "node tests/run-all-tests.js",

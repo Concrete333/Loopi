@@ -11,6 +11,54 @@ function buildAgentMenu(agents) {
     .join(', ');
 }
 
+function formatAgentStatus(displayStatus) {
+  if (!displayStatus) {
+    return null;
+  }
+
+  if (displayStatus.ready) {
+    return 'ready';
+  }
+
+  if (displayStatus.status === 'installed_but_needs_login') {
+    const command = displayStatus.nextAction && displayStatus.nextAction.command
+      ? ` - run: ${displayStatus.nextAction.command}`
+      : '';
+    return `needs login${command}`;
+  }
+
+  if (displayStatus.status === 'missing') {
+    return 'not installed';
+  }
+
+  if (displayStatus.errorMessage) {
+    return `unavailable - ${displayStatus.errorMessage}`;
+  }
+
+  return 'needs setup';
+}
+
+function writeAgentMenu(io, supportedAgents, agentDisplayStatuses = null) {
+  if (!agentDisplayStatuses || agentDisplayStatuses.length === 0) {
+    io.writeLine(`Supported agents: ${buildAgentMenu(supportedAgents)}`);
+    return;
+  }
+
+  const statusById = new Map(
+    agentDisplayStatuses.map((entry) => [String(entry.id || '').trim().toLowerCase(), entry])
+  );
+  const longestAgent = supportedAgents.reduce((max, agent) => Math.max(max, agent.length), 0);
+
+  io.writeLine('Supported agents:');
+  supportedAgents.forEach((agent, index) => {
+    const displayStatus = statusById.get(agent);
+    const formattedStatus = formatAgentStatus(displayStatus);
+    const paddedAgent = agent.padEnd(longestAgent, ' ');
+    const suffix = formattedStatus ? ` [${formattedStatus}]` : '';
+    io.writeLine(`  ${index + 1}) ${paddedAgent}${suffix}`);
+  });
+}
+
 function parseYesNo(value, defaultValue = null) {
   const normalized = normalizeAnswer(value).toLowerCase();
   if (!normalized) {
@@ -160,10 +208,11 @@ async function askYesNo(io, message, {
 }
 
 async function askAgentSelection(io, {
-  message = 'Which agents should help?',
-  supportedAgents = SUPPORTED_AGENTS
+  message = 'Which agents should help? (one or more, comma-separated)',
+  supportedAgents = SUPPORTED_AGENTS,
+  agentDisplayStatuses = null
 } = {}) {
-  io.writeLine(`Supported agents: ${buildAgentMenu(supportedAgents)}`);
+  writeAgentMenu(io, supportedAgents, agentDisplayStatuses);
   io.writeLine('Enter agent names or numbers separated by commas.');
 
   while (true) {
@@ -172,14 +221,17 @@ async function askAgentSelection(io, {
       return result.value;
     }
     io.writeLine(result.error);
+    writeAgentMenu(io, supportedAgents, agentDisplayStatuses);
   }
 }
 
 async function askSingleAgentSelection(io, {
   message,
-  supportedAgents
+  supportedAgents,
+  agentDisplayStatuses = null
 }) {
-  io.writeLine(`Choose one agent: ${buildAgentMenu(supportedAgents)}`);
+  io.writeLine('Choose exactly one agent:');
+  writeAgentMenu(io, supportedAgents, agentDisplayStatuses);
 
   while (true) {
     const result = parseAgentSelection(await io.prompt(`${message}: `), supportedAgents);
@@ -188,9 +240,11 @@ async function askSingleAgentSelection(io, {
     }
     if (result.ok) {
       io.writeLine('Please choose exactly one agent.');
+      writeAgentMenu(io, supportedAgents, agentDisplayStatuses);
       continue;
     }
     io.writeLine(result.error);
+    writeAgentMenu(io, supportedAgents, agentDisplayStatuses);
   }
 }
 
@@ -229,6 +283,70 @@ async function askModeSelection(io, {
   }
 }
 
+async function askUseCase(io, {
+  projectRoot,
+  message = 'Which use case do you want to use?',
+  listUseCases = null
+} = {}) {
+  const { listAvailableUseCases } = require('./use-case-loader');
+  const loader = typeof listUseCases === 'function' ? listUseCases : listAvailableUseCases;
+  const availableUseCases = loader(projectRoot);
+
+  if (availableUseCases.length === 0) {
+    throw new Error('No use cases are available. Add config/use-cases/*.json before using this wizard flow.');
+  }
+
+  io.writeLine(`Available use cases: ${availableUseCases.map((name, index) => `${index + 1}) ${name}`).join(', ')}`);
+  io.writeLine('Enter a use case name or number.');
+
+  while (true) {
+    const answer = normalizeAnswer(await io.prompt(`${message}: `));
+    if (!answer) {
+      io.writeLine('Please choose a use case.');
+      continue;
+    }
+
+    const byNumber = /^\d+$/.test(answer);
+    const index = byNumber ? Number(answer) - 1 : -1;
+
+    if (index >= 0 && index < availableUseCases.length) {
+      return availableUseCases[index];
+    }
+
+    if (byNumber && index >= availableUseCases.length) {
+      io.writeLine('Invalid number. Try again.');
+      continue;
+    }
+
+    if (availableUseCases.includes(answer)) {
+      return answer;
+    }
+
+    io.writeLine(`Unknown use case "${answer}". Available: ${availableUseCases.join(', ')}`);
+  }
+}
+
+async function askPositiveInteger(io, {
+  message,
+  fieldName,
+  defaultValue = null
+} = {}) {
+  while (true) {
+    const suffix = Number.isInteger(defaultValue) && defaultValue > 0 ? ` [${defaultValue}]` : '';
+    const answer = normalizeAnswer(await io.prompt(`${message}${suffix}: `));
+    if (!answer && Number.isInteger(defaultValue) && defaultValue > 0) {
+      return defaultValue;
+    }
+    const parsed = Number(answer);
+
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+
+    io.writeLine(`${fieldName} must be a positive integer.`);
+  }
+}
+
 module.exports = {
   createPromptIO,
   askRequiredText,
@@ -236,5 +354,7 @@ module.exports = {
   askAgentSelection,
   askSingleAgentSelection,
   askModeSelection,
+  askUseCase,
+  askPositiveInteger,
   parseAgentSelection
 };

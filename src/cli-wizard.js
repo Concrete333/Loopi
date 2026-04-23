@@ -9,8 +9,11 @@ const {
   askYesNo,
   askAgentSelection,
   askSingleAgentSelection,
-  askModeSelection
+  askModeSelection,
+  askUseCase,
+  askPositiveInteger
 } = require('./cli-prompts');
+const { getAllAdapterDisplayStatus } = require('./setup-service');
 
 const COMMAND_TO_MODE = {
   plan: 'plan',
@@ -40,13 +43,22 @@ function buildWizardTaskConfig({
   writeAgent = null,
   reviewPrompt = null,
   synthesisPrompt = null,
-  customImplementPrompt = null
+  customImplementPrompt = null,
+  useCase = null,
+  planLoops = null,
+  qualityLoops = null,
+  sectionImplementLoops = null,
+  implementLoops = null
 }) {
   const rawConfig = {
     mode,
     prompt,
     agents
   };
+
+  if (useCase !== null) {
+    rawConfig.useCase = useCase;
+  }
 
   if (includeContext) {
     rawConfig.context = { dir: './context' };
@@ -70,6 +82,34 @@ function buildWizardTaskConfig({
     rawConfig.customImplementPrompt = customImplementPrompt;
   }
 
+  if (planLoops !== null) {
+    if (!rawConfig.settings) {
+      rawConfig.settings = {};
+    }
+    rawConfig.settings.planLoops = planLoops;
+  }
+
+  if (qualityLoops !== null) {
+    if (!rawConfig.settings) {
+      rawConfig.settings = {};
+    }
+    rawConfig.settings.qualityLoops = qualityLoops;
+  }
+
+  if (sectionImplementLoops !== null) {
+    if (!rawConfig.settings) {
+      rawConfig.settings = {};
+    }
+    rawConfig.settings.sectionImplementLoops = sectionImplementLoops;
+  }
+
+  if (implementLoops !== null) {
+    if (!rawConfig.settings) {
+      rawConfig.settings = {};
+    }
+    rawConfig.settings.implementLoops = implementLoops;
+  }
+
   return rawConfig;
 }
 
@@ -85,7 +125,100 @@ async function pathExists(targetPath, stat = fs.stat) {
   }
 }
 
-async function chooseWriteAgent(io, agents) {
+async function countFilesInDirectory(targetPath, readdir = fs.readdir) {
+  let total = 0;
+  const stack = [targetPath];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    const entries = await readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        stack.push(path.join(current, entry.name));
+        continue;
+      }
+      if (entry.isFile()) {
+        total += 1;
+      }
+    }
+  }
+
+  return total;
+}
+
+function summarizeLoopSettings({
+  mode,
+  planLoops,
+  qualityLoops,
+  sectionImplementLoops,
+  implementLoops
+}) {
+  const lines = [];
+
+  if (mode === 'plan' && planLoops !== null) {
+    lines.push(`plan loops: ${planLoops}`);
+  }
+
+  if (mode === 'one-shot') {
+    if (qualityLoops !== null) {
+      lines.push(`quality loops: ${qualityLoops}`);
+    }
+    if (planLoops !== null) {
+      lines.push(`plan loops: ${planLoops}`);
+    }
+    if (sectionImplementLoops !== null) {
+      lines.push(`section loops: ${sectionImplementLoops}`);
+    }
+  }
+
+  if (mode === 'implement' && implementLoops !== null) {
+    lines.push(`implementation loops: ${implementLoops}`);
+  }
+
+  return lines;
+}
+
+async function confirmTaskWrite(io, {
+  taskFile,
+  mode,
+  prompt,
+  agents,
+  useCase,
+  includeContext,
+  contextFileCount,
+  contextFileCountKnown,
+  planLoops,
+  qualityLoops,
+  sectionImplementLoops,
+  implementLoops
+}) {
+  io.writeLine('About to write:');
+  io.writeLine(`  file:        ${taskFile}`);
+  io.writeLine(`  mode:        ${mode}`);
+  io.writeLine(`  prompt:      ${prompt}`);
+  io.writeLine(`  agents:      ${agents.join(', ')}`);
+  io.writeLine(`  use case:    ${useCase || 'none'}`);
+  io.writeLine(
+    `  context:     ${includeContext
+      ? (contextFileCountKnown ? `./context (${contextFileCount} file(s))` : './context (file count unavailable)')
+      : 'none'}`
+  );
+  for (const line of summarizeLoopSettings({
+    mode,
+    planLoops,
+    qualityLoops,
+    sectionImplementLoops,
+    implementLoops
+  })) {
+    io.writeLine(`  ${line}`);
+  }
+
+  return askYesNo(io, 'Write this task file?', {
+    defaultValue: true
+  });
+}
+
+async function chooseWriteAgent(io, agents, agentDisplayStatuses = null) {
   while (true) {
     const allowWrites = await askYesNo(io, 'Should one agent be allowed to edit files?', {
       defaultValue: false
@@ -93,8 +226,9 @@ async function chooseWriteAgent(io, agents) {
 
     if (allowWrites) {
       return askSingleAgentSelection(io, {
-        message: 'Which agent may edit files',
-        supportedAgents: agents
+        message: 'Which one agent may edit files? (choose exactly one)',
+        supportedAgents: agents,
+        agentDisplayStatuses
       });
     }
 
@@ -110,36 +244,146 @@ async function chooseWriteAgent(io, agents) {
   }
 }
 
+function resolveUseCaseLoader(listUseCases) {
+  const { listAvailableUseCases } = require('./use-case-loader');
+  return typeof listUseCases === 'function' ? listUseCases : listAvailableUseCases;
+}
+
+async function resolveUseCaseSelection({
+  io,
+  mode,
+  projectRoot,
+  listUseCases
+}) {
+  if (mode === 'one-shot') {
+    return askUseCase(io, { projectRoot, listUseCases });
+  }
+
+  if (mode !== 'plan') {
+    return null;
+  }
+
+  let availableUseCases = [];
+  try {
+    availableUseCases = resolveUseCaseLoader(listUseCases)(projectRoot);
+  } catch (error) {
+    io.writeLine(`[warn] Could not read available use cases: ${error.message}. Continuing without a use case.`);
+    return null;
+  }
+
+  if (availableUseCases.length === 0) {
+    return null;
+  }
+
+  return askUseCase(io, { projectRoot, listUseCases });
+}
+
 async function collectWizardAnswers(mode, {
   io,
   projectRoot,
   stat = fs.stat,
-  includeRunNow = true
+  readdir = fs.readdir,
+  includeRunNow = true,
+  listUseCases = null,
+  defaultLoopValue = null,
+  runNowDefault = false,
+  getAdapterStatuses = null
 }) {
   const prompt = await askRequiredText(io, 'What do you want the agents to do', {
     emptyMessage: 'Please enter a non-empty prompt.'
   });
+  let agentDisplayStatuses = [];
+  if (typeof getAdapterStatuses === 'function') {
+    try {
+      agentDisplayStatuses = await getAdapterStatuses({ cwd: projectRoot });
+    } catch {
+      agentDisplayStatuses = [];
+    }
+  }
   const agents = await askAgentSelection(io, {
-    message: 'Which agents should help'
+    agentDisplayStatuses
   });
+
+  const useCase = await resolveUseCaseSelection({
+    io,
+    mode,
+    projectRoot,
+    listUseCases
+  });
+
+  // Ask for loop settings based on mode
+  let planLoops = null;
+  let qualityLoops = null;
+  let sectionImplementLoops = null;
+  let implementLoops = null;
+
+  if (mode === 'plan') {
+    planLoops = await askPositiveInteger(io, {
+      message: 'Plan loops (how many plan-review-synthesis cycles)',
+      fieldName: 'planLoops',
+      defaultValue: defaultLoopValue
+    });
+  } else if (mode === 'one-shot') {
+    qualityLoops = await askPositiveInteger(io, {
+      message: 'Quality loops (outer one-shot reruns)',
+      fieldName: 'qualityLoops',
+      defaultValue: defaultLoopValue
+    });
+    planLoops = await askPositiveInteger(io, {
+      message: 'Plan loops (cycles per quality loop)',
+      fieldName: 'planLoops',
+      defaultValue: defaultLoopValue
+    });
+    sectionImplementLoops = await askPositiveInteger(io, {
+      message: 'Section implementation loops (per-section implement-review-repair cycles)',
+      fieldName: 'sectionImplementLoops',
+      defaultValue: defaultLoopValue
+    });
+  } else if (mode === 'implement') {
+    implementLoops = await askPositiveInteger(io, {
+      message: 'Implementation loops (implement-review-repair cycles)',
+      fieldName: 'implementLoops',
+      defaultValue: defaultLoopValue
+    });
+  }
 
   let writeAgent = null;
   if (isWriteMode(mode)) {
-    writeAgent = await chooseWriteAgent(io, agents);
+    const selectedStatuses = agentDisplayStatuses.filter((entry) => agents.includes(entry.id));
+    writeAgent = await chooseWriteAgent(io, agents, selectedStatuses);
   }
 
   const contextDir = path.join(projectRoot, 'context');
   const contextAvailable = await pathExists(contextDir, stat);
   let includeContext = false;
+  let contextFileCount = 0;
+  let contextFileCountKnown = false;
   if (contextAvailable) {
-    includeContext = await askYesNo(io, 'Use the ./context folder for reference material?', {
-      defaultValue: false
-    });
+    try {
+      contextFileCount = await countFilesInDirectory(contextDir, readdir);
+      contextFileCountKnown = true;
+    } catch (error) {
+      io.writeLine(`[warn] Could not inspect ./context: ${error.message}. You can still choose to include it.`);
+    }
+
+    if (!contextFileCountKnown) {
+      includeContext = await askYesNo(io, 'Use the ./context folder for reference material? (file count unavailable)', {
+        defaultValue: false
+      });
+    } else if (contextFileCount > 0) {
+      includeContext = await askYesNo(
+        io,
+        `Use the ./context folder for reference material? (${contextFileCount} file(s) found)`,
+        {
+          defaultValue: false
+        }
+      );
+    }
   }
 
   const runNow = includeRunNow
     ? await askYesNo(io, 'Run now?', {
-      defaultValue: true
+      defaultValue: runNowDefault
     })
     : null;
 
@@ -148,7 +392,14 @@ async function collectWizardAnswers(mode, {
     agents,
     writeAgent,
     includeContext,
-    runNow
+    runNow,
+    useCase,
+    planLoops,
+    qualityLoops,
+    sectionImplementLoops,
+    implementLoops,
+    contextFileCount,
+    contextFileCountKnown
   };
 }
 
@@ -174,7 +425,10 @@ async function runBeginnerWizard(command, {
   rename = fs.rename,
   unlink = fs.unlink,
   mkdir = fs.mkdir,
-  stat = fs.stat
+  stat = fs.stat,
+  readdir = fs.readdir,
+  listUseCases = null,
+  getAdapterStatuses = null
 } = {}) {
   const mode = resolveWizardMode(command);
   const taskFile = taskPaths.legacyTaskFile(projectRoot);
@@ -185,7 +439,12 @@ async function runBeginnerWizard(command, {
       io,
       projectRoot,
       stat,
-      includeRunNow: true
+      readdir,
+      includeRunNow: true,
+      listUseCases,
+      defaultLoopValue: 1,
+      runNowDefault: false,
+      getAdapterStatuses
     });
 
     const rawConfig = buildWizardTaskConfig({
@@ -193,10 +452,41 @@ async function runBeginnerWizard(command, {
       prompt: answers.prompt,
       agents: answers.agents,
       includeContext: answers.includeContext,
-      writeAgent: answers.writeAgent
+      writeAgent: answers.writeAgent,
+      useCase: answers.useCase,
+      planLoops: answers.planLoops,
+      qualityLoops: answers.qualityLoops,
+      sectionImplementLoops: answers.sectionImplementLoops,
+      implementLoops: answers.implementLoops
     });
 
     const normalizedConfig = normalizeConfig(rawConfig, { projectRoot });
+    const confirmed = await confirmTaskWrite(io, {
+      taskFile,
+      mode,
+      prompt: answers.prompt,
+      agents: answers.agents,
+      useCase: answers.useCase,
+      includeContext: answers.includeContext,
+      contextFileCount: answers.contextFileCount,
+      contextFileCountKnown: answers.contextFileCountKnown,
+      planLoops: answers.planLoops,
+      qualityLoops: answers.qualityLoops,
+      sectionImplementLoops: answers.sectionImplementLoops,
+      implementLoops: answers.implementLoops
+    });
+
+    if (!confirmed) {
+      io.writeLine('Task not written.');
+      return {
+        mode,
+        rawConfig,
+        normalizedConfig,
+        runNow: false,
+        taskFile,
+        wroteTask: false
+      };
+    }
 
     await mkdir(sharedDir, { recursive: true });
     await atomicWriteText(taskFile, JSON.stringify(rawConfig, null, 2) + '\n', {
@@ -215,7 +505,8 @@ async function runBeginnerWizard(command, {
       rawConfig,
       normalizedConfig,
       runNow: answers.runNow,
-      taskFile
+      taskFile,
+      wroteTask: true
     };
   } finally {
     if (io && typeof io.close === 'function') {
@@ -232,7 +523,10 @@ async function runAdvancedWizard({
   rename = fs.rename,
   unlink = fs.unlink,
   mkdir = fs.mkdir,
-  stat = fs.stat
+  stat = fs.stat,
+  readdir = fs.readdir,
+  listUseCases = null,
+  getAdapterStatuses = null
 } = {}) {
   const taskFile = taskPaths.legacyTaskFile(projectRoot);
   const sharedDir = taskPaths.sharedDir(projectRoot);
@@ -245,7 +539,12 @@ async function runAdvancedWizard({
       io,
       projectRoot,
       stat,
-      includeRunNow: false
+      readdir,
+      includeRunNow: false,
+      listUseCases,
+      defaultLoopValue: null,
+      runNowDefault: false,
+      getAdapterStatuses
     });
 
     let reviewPrompt = null;
@@ -274,7 +573,7 @@ async function runAdvancedWizard({
     }
 
     const runNow = await askYesNo(io, 'Run now?', {
-      defaultValue: true
+      defaultValue: false
     });
 
     const rawConfig = buildWizardTaskConfig({
@@ -285,10 +584,41 @@ async function runAdvancedWizard({
       writeAgent: answers.writeAgent,
       reviewPrompt,
       synthesisPrompt,
-      customImplementPrompt
+      customImplementPrompt,
+      useCase: answers.useCase,
+      planLoops: answers.planLoops,
+      qualityLoops: answers.qualityLoops,
+      sectionImplementLoops: answers.sectionImplementLoops,
+      implementLoops: answers.implementLoops
     });
 
     const normalizedConfig = normalizeConfig(rawConfig, { projectRoot });
+    const confirmed = await confirmTaskWrite(io, {
+      taskFile,
+      mode,
+      prompt: answers.prompt,
+      agents: answers.agents,
+      useCase: answers.useCase,
+      includeContext: answers.includeContext,
+      contextFileCount: answers.contextFileCount,
+      contextFileCountKnown: answers.contextFileCountKnown,
+      planLoops: answers.planLoops,
+      qualityLoops: answers.qualityLoops,
+      sectionImplementLoops: answers.sectionImplementLoops,
+      implementLoops: answers.implementLoops
+    });
+
+    if (!confirmed) {
+      io.writeLine('Task not written.');
+      return {
+        mode,
+        rawConfig,
+        normalizedConfig,
+        runNow: false,
+        taskFile,
+        wroteTask: false
+      };
+    }
 
     await mkdir(sharedDir, { recursive: true });
     await atomicWriteText(taskFile, JSON.stringify(rawConfig, null, 2) + '\n', {
@@ -307,7 +637,8 @@ async function runAdvancedWizard({
       rawConfig,
       normalizedConfig,
       runNow,
-      taskFile
+      taskFile,
+      wroteTask: true
     };
   } finally {
     if (io && typeof io.close === 'function') {

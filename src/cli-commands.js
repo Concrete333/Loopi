@@ -5,37 +5,65 @@ const { runBeginnerWizard, runAdvancedWizard } = require('./cli-wizard');
 const { listPresets, savePreset, usePreset } = require('./cli-presets');
 const { runDoctorCheck } = require('./cli-doctor');
 const { createForkTaskFromRun, compareRuns } = require('./cli-audit');
+const { createPromptIO, askYesNo } = require('./cli-prompts');
+const {
+  getSupportedAgentIds,
+  getAllAdapterDisplayStatus,
+  getAdapterMetadata,
+  runAdapterInstall,
+  runAdapterLogin
+} = require('./setup-service');
 
 function buildHelpText() {
   return [
     'Loopi CLI',
     '',
+    'First time? Run: npm run cli -- doctor',
+    'Then pick a mode: plan | review | implement | oneshot',
+    '',
     'Usage:',
     '  npm run cli -- <command>',
     '  npm run cli -- new --advanced',
+    '  npm run cli -- install <agent>',
+    '  npm run cli -- login <agent>',
     '  npm run cli -- preset <save|list|use> [name]',
     '  npm run cli -- fork <runId> [stepId] [--reason "text"] [--run]',
     '  npm run cli -- compare <runIdA> <runIdB>',
     '',
-    'Available commands:',
-    '  help        Show this help text',
-    '  run         Run the current shared/task.json through Loopi',
-    '  open        Show the scratchpad path and print its contents if present',
+    'Setup:',
+    '  doctor      Check the environment and current task',
+    '  install     Install a supported agent helper when available',
+    '  login       Run the login flow for a supported agent',
+    '  new         Start the opt-in advanced wizard',
+    '',
+    'Start a task:',
     '  plan        Interactive plan-mode wizard',
     '  review      Interactive review-mode wizard',
     '  implement   Interactive implement-mode wizard',
     '  oneshot     Interactive one-shot wizard',
+    '',
+    'Run and inspect:',
+    '  run         Run the current shared/task.json through Loopi',
+    '  open        Show the scratchpad path and print its contents if present',
+    '',
+    'Manage prior work:',
     '  preset      Save, list, or use named task presets',
     '  fork        Create a forked shared/task.json from a prior run',
     '  compare     Compare two prior runs using recorded snapshots',
-    '  doctor      Check the current task file and selected agents',
-    '  new         Start the opt-in advanced wizard',
+    '',
+    '  help        Show this help text',
     ''
   ].join('\n');
 }
 
 function writeLine(stream, text = '') {
   stream.write(`${text}\n`);
+}
+
+function writeRunStartInfo(stdout, intro) {
+  writeLine(stdout, intro);
+  writeLine(stdout, 'Progress will appear below. Final output is written to shared/scratchpad.txt when the run finishes.');
+  writeLine(stdout, 'Press Ctrl+C to cancel.');
 }
 
 async function openScratchpad({
@@ -76,6 +104,8 @@ async function runCurrentTask({
   projectRoot,
   createOrchestrator,
   stat = fs.stat,
+  stdout = process.stdout,
+  intro = null,
   stderr = process.stderr
 }) {
   const taskFile = taskPaths.legacyTaskFile(projectRoot);
@@ -84,10 +114,15 @@ async function runCurrentTask({
   } catch (error) {
     if (error && error.code === 'ENOENT') {
       writeLine(stderr, `No task file at ${taskFile}.`);
-      writeLine(stderr, 'Create one with `npm run cli -- plan`, `review`, `implement`, or `oneshot` first.');
+      writeLine(stderr, '- If this is your first run: `npm run cli -- doctor` to check your setup.');
+      writeLine(stderr, '- Then: `npm run cli -- plan` (or `review`, `implement`, `oneshot`) to write one.');
       return 1;
     }
     throw error;
+  }
+
+  if (intro) {
+    writeRunStartInfo(stdout, intro);
   }
 
   const orchestrator = await createOrchestrator(projectRoot);
@@ -104,14 +139,21 @@ async function runWizardCommand(command, {
   projectRoot,
   runWizard,
   createOrchestrator,
+  getAdapterStatuses,
   stdout = process.stdout,
   stderr = process.stderr,
   stat = fs.stat
 }) {
-  const result = await runWizard(command, { projectRoot });
+  const result = await runWizard(command, { projectRoot, getAdapterStatuses });
   if (result && result.runNow) {
-    writeLine(stdout, 'Task written. Starting run...');
-    return runCurrentTask({ projectRoot, createOrchestrator, stat, stderr });
+    return runCurrentTask({
+      projectRoot,
+      createOrchestrator,
+      stat,
+      stdout,
+      intro: 'Task written. Starting run...',
+      stderr
+    });
   }
   return 0;
 }
@@ -122,6 +164,7 @@ async function runAdvancedWizardCommand(args, {
   stderr,
   runAdvanced,
   createOrchestrator,
+  getAdapterStatuses,
   stat = fs.stat
 }) {
   if (!args.includes('--advanced')) {
@@ -129,10 +172,16 @@ async function runAdvancedWizardCommand(args, {
     return 1;
   }
 
-  const result = await runAdvanced({ projectRoot });
+  const result = await runAdvanced({ projectRoot, getAdapterStatuses });
   if (result && result.runNow) {
-    writeLine(stdout, 'Task written. Starting run...');
-    return runCurrentTask({ projectRoot, createOrchestrator, stat, stderr });
+    return runCurrentTask({
+      projectRoot,
+      createOrchestrator,
+      stat,
+      stdout,
+      intro: 'Task written. Starting run...',
+      stderr
+    });
   }
   return 0;
 }
@@ -201,6 +250,72 @@ async function runDoctorCommand({
     writeLine(stdout, line);
   }
   return result.ok ? 0 : 1;
+}
+
+function formatSupportedAgents() {
+  return getSupportedAgentIds().join(', ');
+}
+
+async function runAdapterHelperCommand(action, args, {
+  projectRoot,
+  stdout,
+  stderr,
+  createIO = createPromptIO,
+  installHelper = runAdapterInstall,
+  loginHelper = runAdapterLogin
+}) {
+  const agentId = args[0] ? String(args[0]).trim().toLowerCase() : '';
+  if (!agentId) {
+    writeLine(stderr, `Usage: npm run cli -- ${action} <agent>`);
+    writeLine(stderr, `Supported agents: ${formatSupportedAgents()}`);
+    return 1;
+  }
+
+  const metadata = getAdapterMetadata(agentId);
+  if (!metadata) {
+    writeLine(stderr, `Unknown agent "${agentId}".`);
+    writeLine(stderr, `Supported agents: ${formatSupportedAgents()}`);
+    return 1;
+  }
+
+  const commandText = action === 'install'
+    ? metadata.installCommand && metadata.installCommand.command
+    : metadata.loginCommand && metadata.loginCommand.shellCommand;
+
+  if (!commandText) {
+    writeLine(stderr, `${metadata.displayName} does not have a built-in ${action} helper.`);
+    return 1;
+  }
+
+  const io = createIO();
+  try {
+    const approved = await askYesNo(
+      io,
+      `This will run: ${commandText}. Continue?`,
+      { defaultValue: false }
+    );
+    if (!approved) {
+      writeLine(stdout, `${action === 'install' ? 'Install' : 'Login'} cancelled.`);
+      return 0;
+    }
+  } finally {
+    if (io && typeof io.close === 'function') {
+      await io.close();
+    }
+  }
+
+  const helper = action === 'install' ? installHelper : loginHelper;
+  const result = await helper(agentId, {
+    approved: true,
+    cwd: projectRoot
+  });
+
+  writeLine(stdout, result.message);
+  if (result.statusAfter) {
+    const readyText = result.statusAfter.ready ? 'yes' : 'no';
+    writeLine(stdout, `Status after ${action}: ${result.statusAfter.status} (ready: ${readyText})`);
+  }
+  return result.success ? 0 : 1;
 }
 
 function parseForkArgs(args) {
@@ -289,8 +404,14 @@ async function runForkCommand(args, {
   }
 
   if (parsed.runNow) {
-    writeLine(stdout, 'Task written. Starting run...');
-    return runCurrentTask({ projectRoot, createOrchestrator, stat, stderr });
+    return runCurrentTask({
+      projectRoot,
+      createOrchestrator,
+      stat,
+      stdout,
+      intro: 'Task written. Starting run...',
+      stderr
+    });
   }
 
   writeLine(stdout, 'Run it with: npm run cli -- run');
@@ -333,12 +454,16 @@ async function runCommand(command, {
   createOrchestrator = async (root) => new LoopiOrchestrator({ projectRoot: root }),
   runWizard = runBeginnerWizard,
   runAdvanced = runAdvancedWizard,
+  createIO = createPromptIO,
+  getAdapterStatuses = getAllAdapterDisplayStatus,
   listPresetEntries = listPresets,
   savePresetFile = savePreset,
   usePresetFile = usePreset,
   runDoctor = runDoctorCheck,
   createForkTask = createForkTaskFromRun,
-  compareRunsHelper = compareRuns
+  compareRunsHelper = compareRuns,
+  installHelper = runAdapterInstall,
+  loginHelper = runAdapterLogin
 } = {}) {
   const normalizedCommand = typeof command === 'string' && command.trim() !== ''
     ? command.trim().toLowerCase()
@@ -350,7 +475,14 @@ async function runCommand(command, {
   }
 
   if (normalizedCommand === 'run') {
-    return runCurrentTask({ projectRoot, createOrchestrator, stat, stderr });
+    return runCurrentTask({
+      projectRoot,
+      createOrchestrator,
+      stat,
+      stdout,
+      intro: 'Starting run...',
+      stderr
+    });
   }
 
   if (normalizedCommand === 'open') {
@@ -373,6 +505,17 @@ async function runCommand(command, {
       projectRoot,
       stdout,
       runDoctor
+    });
+  }
+
+  if (normalizedCommand === 'install' || normalizedCommand === 'login') {
+    return runAdapterHelperCommand(normalizedCommand, args, {
+      projectRoot,
+      stdout,
+      stderr,
+      createIO,
+      installHelper,
+      loginHelper
     });
   }
 
@@ -403,6 +546,7 @@ async function runCommand(command, {
       stderr,
       runAdvanced,
       createOrchestrator,
+      getAdapterStatuses,
       stat
     });
   }
@@ -415,6 +559,7 @@ async function runCommand(command, {
       projectRoot,
       runWizard,
       createOrchestrator,
+      getAdapterStatuses,
       stdout,
       stderr,
       stat

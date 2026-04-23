@@ -94,7 +94,6 @@ async function runEnvironmentCheck({
   }
 
   // Check for environment overrides
-  lines.push('[info] Environment overrides (set to change detection paths):');
   const overrides = {
     LOOPI_CLAUDE_PATH: 'Claude',
     LOOPI_CODEX_JS: 'Codex',
@@ -104,15 +103,16 @@ async function runEnvironmentCheck({
     LOOPI_OPENCODE_PATH: 'Opencode'
   };
 
-  for (const [envVar, name] of Object.entries(overrides)) {
-    const value = process.env[envVar];
-    if (value) {
-      lines.push(`      ${envVar} = ${value}`);
+  const activeOverrides = Object.entries(overrides).filter(([envVar]) => process.env[envVar]);
+  if (activeOverrides.length > 0) {
+    lines.push('[info] Environment overrides (active):');
+    for (const [envVar] of activeOverrides) {
+      lines.push(`      ${envVar} = ${process.env[envVar]}`);
     }
+    lines.push('');
   }
 
   if (readyAdapters.length > 0) {
-    lines.push('');
     lines.push(`[ok] ${readyAdapters.length} adapter(s) ready to use`);
     return { ok: true, lines, hasReadyAgents: true };
   }
