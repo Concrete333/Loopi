@@ -29,6 +29,92 @@
       roleSelect
     } = deps;
 
+    function formatBuiltAt(value) {
+      if (value === null || value === undefined || value === '') {
+        return '';
+      }
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return String(value);
+      }
+      return date.toLocaleString();
+    }
+
+    function renderContextStatusMarkup() {
+      if (!state.contextStatus) {
+        return '<p class="muted">Loading context status...</p>';
+      }
+
+      const cs = state.contextStatus;
+      if (cs.ok === false || cs.status === 'invalid-config') {
+        return `<div class="message message--warning">${escapeHtml(cs.error || 'Context status is unavailable until the draft config is valid.')}</div>` +
+          '<div class="button-row"><button class="button button--ghost" id="refresh-context-status">Refresh Status</button></div>';
+      }
+
+      if (cs.status === 'no-context') {
+        return '<p class="muted">No context folder configured.</p>' +
+          '<div class="button-row"><button class="button button--ghost" id="refresh-context-status">Refresh Status</button></div>';
+      }
+
+      const chips = [];
+      if (cs.status === 'ready') {
+        chips.push('<span class="chip chip--success">Ready</span>');
+      } else if (cs.status === 'ready-with-warnings') {
+        chips.push('<span class="chip chip--warning">Ready (warnings)</span>');
+      } else if (cs.status === 'drifted') {
+        chips.push('<span class="chip chip--danger">Drifted</span>');
+      } else if (cs.status === 'missing') {
+        chips.push('<span class="chip chip--danger">Not prepared</span>');
+      } else if (cs.status === 'config-mismatch') {
+        chips.push('<span class="chip chip--danger">Config mismatch</span>');
+      } else {
+        chips.push(statusChip(cs.status, false));
+      }
+      if (cs.builtAt) {
+        chips.push(`<span class="chip chip--neutral">Built: ${escapeHtml(formatBuiltAt(cs.builtAt))}</span>`);
+      }
+      if (cs.driftedSources && cs.driftedSources.length > 0) {
+        chips.push(`<span class="chip chip--danger">${cs.driftedSources.length} drifted</span>`);
+      }
+      if (cs.skippedSources && cs.skippedSources.length > 0) {
+        chips.push(`<span class="chip chip--warning">${cs.skippedSources.length} skipped</span>`);
+      }
+
+      const mismatchList = (cs.mismatches && cs.mismatches.length > 0)
+        ? '<div class="message message--error"><strong>Drift:</strong> ' +
+          cs.mismatches.slice(0, 5).map(function (m) {
+            return escapeHtml(m.field + ': ' + (m.reason || m.description || 'mismatch'));
+          }).join('<br>') +
+          '</div>'
+        : '';
+
+      const driftedList = (cs.driftedSources && cs.driftedSources.length > 0)
+        ? '<div class="message message--error"><strong>Changed sources:</strong> ' +
+          cs.driftedSources.slice(0, 5).map(function (d) {
+            return escapeHtml(d.sourceRelativePath + ' (' + (d.change || 'changed') + ')');
+          }).join('<br>') +
+          '</div>'
+        : '';
+
+      const skippedList = (cs.skippedSources && cs.skippedSources.length > 0)
+        ? '<div class="message message--warning"><strong>Skipped:</strong> ' +
+          cs.skippedSources.slice(0, 5).map(function (s) {
+            return escapeHtml(s.sourceRelativePath + ' (' + (s.reason || s.skipReason || 'skipped') + ')');
+          }).join('<br>') +
+          '</div>'
+        : '';
+
+      const needsPrepare = cs.status === 'missing' || cs.status === 'drifted' || cs.status === 'config-mismatch';
+      return '<div class="chip-row" style="margin-bottom:0.5rem">' + chips.join('') + '</div>' +
+        mismatchList + driftedList + skippedList +
+        '<div class="button-row">' +
+          '<button class="button button--' + (needsPrepare ? 'primary' : 'secondary') + '" id="prepare-context">' +
+            (needsPrepare ? 'Prepare Context' : 'Re-prepare Context') +
+          '</button>' +
+          '<button class="button button--ghost" id="refresh-context-status">Refresh Status</button>' +
+        '</div>';
+    }
+
     function renderHeroSummary() {
       const adapters = state.setupStatus && Array.isArray(state.setupStatus.adapters) ? state.setupStatus.adapters : [];
       const providers = state.providerStatus && state.providerStatus.providers ? Object.values(state.providerStatus.providers) : [];
@@ -278,6 +364,7 @@
               <input data-context-dir value="${escapeHtml(context.dir || './context')}">
             </div>
             <div class="check-grid">
+              <div id="context-status-area">${renderContextStatusMarkup()}</div>
               <div class="check-row">
                 <label>
                   <input type="checkbox" data-context-enabled ${state.configRaw.context ? 'checked' : ''}>

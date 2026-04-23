@@ -26,7 +26,7 @@ const {
 const { normalizeTaskConfig } = require('./task-config');
 const { CollaborationStore } = require('./collaboration-store');
 const { serializeTaskConfigForArtifact } = require('./cli-audit');
-const { buildContextIndex } = require('./context-index');
+const { buildContextIndex, validatePreparedContextReadiness } = require('./context-index');
 const { selectContextForPhase, collectSkippedSourceDiagnostics } = require('./context-selection');
 const { collectPlanAnswers, normalizeClarifications } = require('./plan-questions');
 const { acquireLock, releaseLock } = require('./run-lock');
@@ -651,6 +651,11 @@ class LoopiOrchestrator {
     const rawTask = await this.readJsonFile(this.taskFile, this.defaultTaskConfig());
     const config = normalizeTaskConfig(rawTask, { projectRoot: this.projectRoot });
 
+    // Validate prepared context readiness before any run artifacts are written.
+    // This catches missing, drifted, or config-mismatched caches early so the
+    // user can re-prepare without leaving behind a partial run record.
+    await validatePreparedContextReadiness(config.context, this.projectRoot);
+
     const run = this.createRun(config);
     this.lastRun = run;
     this._artifactSeq = 0;
@@ -1012,7 +1017,7 @@ class LoopiOrchestrator {
     }
 
     if (this._contextIndex) {
-      logOrchestratorWarning('buildContextIndex was requested more than once in a single run. Reusing cached context index.');
+      logOrchestratorWarning('Prepared context was consumed more than once in a single run. Reusing cached context index.');
       return this._contextIndex;
     }
 

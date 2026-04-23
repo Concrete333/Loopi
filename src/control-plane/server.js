@@ -291,6 +291,23 @@ async function handleApiRequest(req, res, url, service) {
     return;
   }
 
+  if (req.method === 'GET' && pathname === '/api/context/status') {
+    sendJson(res, 200, { ok: true, data: await service.getContextStatus() });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/context/status') {
+    const body = await readJsonBody(req);
+    sendJson(res, 200, { ok: true, data: await service.getContextStatus({ rawConfig: body.rawConfig || null }) });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/context/prepare') {
+    const body = await readJsonBody(req);
+    sendJson(res, 200, { ok: true, data: await service.prepareContext({ rawConfig: body.rawConfig || null }) });
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/runs') {
     sendJson(res, 200, { ok: true, data: await service.listRuns() });
     return;

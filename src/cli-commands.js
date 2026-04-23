@@ -510,6 +510,9 @@ async function runContextCommand(args, {
 
   const result = await prepareContext(config.context, projectRoot);
   const stats = result.manifest && result.manifest.stats ? result.manifest.stats : {};
+  const sources = result.manifest && Array.isArray(result.manifest.sources)
+    ? result.manifest.sources
+    : [];
 
   writeLine(stdout, `Prepared context cache: ${result.cacheDir}`);
   writeLine(stdout, `Context root: ${result.rootDir}`);
@@ -518,7 +521,31 @@ async function runContextCommand(args, {
     stdout,
     `Sources: total=${stats.total || 0}, rebuilt=${stats.rebuilt || 0}, reused=${stats.reused || 0}, skipped=${stats.skipped || 0}`
   );
-  writeLine(stdout, 'Runs will now reuse this prepared context until you change the context inputs.');
+
+  const skippedEntries = sources.filter((entry) => entry.skipped);
+  if (skippedEntries.length > 0) {
+    writeLine(stdout, '');
+    writeLine(
+      stdout,
+      `Preparation completed with warnings: ${skippedEntries.length} source${skippedEntries.length === 1 ? '' : 's'} ${skippedEntries.length === 1 ? 'was' : 'were'} skipped.`
+    );
+    writeLine(stdout, 'Skipped sources:');
+    const cap = Math.min(skippedEntries.length, 10);
+    for (let i = 0; i < cap; i += 1) {
+      const entry = skippedEntries[i];
+      writeLine(stdout, `  - ${entry.sourceRelativePath}: ${entry.skipReason || 'unsupported format'}`);
+    }
+    if (skippedEntries.length > cap) {
+      writeLine(stdout, `  ... and ${skippedEntries.length - cap} more`);
+    }
+    writeLine(stdout, '');
+    writeLine(stdout, 'Skipped files are not indexed. Runs will still work but will not include their content.');
+  }
+
+  writeLine(
+    stdout,
+    'Runs will now reuse this prepared context until the source files, include/exclude rules, or manifest overrides change.'
+  );
   return 0;
 }
 

@@ -1,7 +1,14 @@
 const assert = require('assert');
+const os = require('os');
 const fs = require('fs').promises;
 const path = require('path');
-const { buildContextIndex, prepareContextIndex } = require('../src/context-index');
+const {
+  buildContextIndex,
+  prepareContextIndex,
+  getPreparedContextStatus,
+  validatePreparedContextReadiness,
+  PreparedContextError
+} = require('../src/context-index');
 
 let passed = 0;
 let failed = 0;
@@ -20,7 +27,7 @@ async function test(name, fn) {
 
 // Helper to create a temp directory with files
 async function createTempContext() {
-  const tmpDir = path.join(__dirname, 'tmp-context-' + Date.now());
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmp-context-'));
 
   // Create directory structure
   await fs.mkdir(path.join(tmpDir, 'shared'), { recursive: true });
@@ -279,7 +286,7 @@ console.log('context-index: buildContextIndex');
           await buildContextIndex(contextConfig, freshDir);
           assert.fail('Should have thrown an error');
         } catch (error) {
-          assert.ok(error.message.includes('Prepared context cache not available'));
+          assert.ok(error.message.includes('Prepared context cache is not ready'));
           assert.ok(error.message.includes('npm run cli -- context prepare'));
         }
       } finally {
@@ -303,8 +310,144 @@ console.log('context-index: buildContextIndex');
         }, tmpDir);
         assert.fail('Should have thrown an error');
       } catch (error) {
-        assert.ok(error.message.includes('Prepared context cache is out of date'));
+        assert.ok(error.message.includes('Prepared context cache is not ready'));
         assert.ok(error.message.includes('npm run cli -- context prepare'));
+      }
+    });
+
+    await test('Reports ready status for a prepared cache with no drift', async () => {
+      const contextConfig = {
+        dir: '.',
+        include: ['**/*.md'],
+        exclude: []
+      };
+
+      await prepareContextIndex(contextConfig, tmpDir);
+      const status = await getPreparedContextStatus(contextConfig, tmpDir);
+
+      assert.strictEqual(status.status, 'ready');
+      assert.strictEqual(status.state, 'ready');
+      assert.ok(status.builtAt);
+      assert.strictEqual(status.driftedSources.length, 0);
+      assert.strictEqual(status.mismatches.length, 0);
+    });
+
+    await test('Reports exclude-pattern drift structurally', async () => {
+      const preparedConfig = {
+        dir: '.',
+        include: ['**/*.md'],
+        exclude: []
+      };
+      await prepareContextIndex(preparedConfig, tmpDir);
+
+      const status = await getPreparedContextStatus({
+        dir: '.',
+        include: ['**/*.md'],
+        exclude: ['**/examples/**']
+      }, tmpDir);
+
+      assert.strictEqual(status.status, 'config-mismatch');
+      assert.ok(status.mismatches.some((m) => m.field === 'exclude'));
+      assert.ok(status.instructions.includes('npm run cli -- context prepare'));
+    });
+
+    await test('Reports manifest-path drift structurally', async () => {
+      await fs.mkdir(path.join(tmpDir, 'meta'), { recursive: true });
+      await fs.writeFile(
+        path.join(tmpDir, 'meta', 'overrides.json'),
+        JSON.stringify({ 'plan/approach.md': { priority: 11 } }, null, 2)
+      );
+
+      const preparedConfig = {
+        dir: '.',
+        include: ['**/*.md'],
+        exclude: [],
+        manifest: 'context.json'
+      };
+      await prepareContextIndex(preparedConfig, tmpDir);
+
+      const status = await getPreparedContextStatus({
+        dir: '.',
+        include: ['**/*.md'],
+        exclude: [],
+        manifest: 'meta/overrides.json'
+      }, tmpDir);
+
+      assert.strictEqual(status.status, 'config-mismatch');
+      assert.ok(status.mismatches.some((m) => m.field === 'contextManifestPath'));
+    });
+
+    await test('Reports source-tree drift when a file is added after prepare', async () => {
+      const contextConfig = {
+        dir: '.',
+        include: ['**/*.md'],
+        exclude: []
+      };
+
+      await prepareContextIndex(contextConfig, tmpDir);
+      await fs.writeFile(path.join(tmpDir, 'shared', 'new-file.md'), 'New context source.', 'utf-8');
+
+      const status = await getPreparedContextStatus(contextConfig, tmpDir);
+
+      assert.strictEqual(status.status, 'drifted');
+      assert.ok(status.driftedSources.some((entry) => entry.sourceRelativePath === 'shared/new-file.md' && entry.change === 'added'));
+      assert.ok(status.instructions.includes('npm run cli -- context prepare'));
+    });
+
+    await test('Reports source-tree drift when a file is removed after prepare', async () => {
+      const contextConfig = {
+        dir: '.',
+        include: ['**/*.md'],
+        exclude: []
+      };
+
+      await prepareContextIndex(contextConfig, tmpDir);
+      await fs.unlink(path.join(tmpDir, 'plan', 'approach.md'));
+
+      const status = await getPreparedContextStatus(contextConfig, tmpDir);
+
+      assert.strictEqual(status.status, 'drifted');
+      assert.ok(status.driftedSources.some((entry) => entry.sourceRelativePath === 'plan/approach.md' && entry.change === 'removed'));
+    });
+
+    await test('Treats a prepared cache missing source-tree fingerprint metadata as stale', async () => {
+      const contextConfig = {
+        dir: '.',
+        include: ['**/*.md'],
+        exclude: []
+      };
+
+      const prepared = await prepareContextIndex(contextConfig, tmpDir);
+      const manifestPath = path.join(prepared.cacheDir, 'manifest.json');
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+      delete manifest.sourceTreeFingerprint;
+      delete manifest.preparedConfig.sourceTreeFingerprint;
+      await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+
+      const status = await getPreparedContextStatus(contextConfig, tmpDir);
+
+      assert.strictEqual(status.status, 'config-mismatch');
+      assert.ok(status.mismatches.some((m) => m.field === 'sourceTreeFingerprint'));
+    });
+
+    await test('validatePreparedContextReadiness throws PreparedContextError for drifted caches', async () => {
+      const contextConfig = {
+        dir: '.',
+        include: ['**/*.md'],
+        exclude: []
+      };
+
+      await prepareContextIndex(contextConfig, tmpDir);
+      await fs.writeFile(path.join(tmpDir, 'shared', 'late-addition.md'), 'Late addition.', 'utf-8');
+
+      try {
+        await validatePreparedContextReadiness(contextConfig, tmpDir);
+        assert.fail('Should have thrown PreparedContextError');
+      } catch (error) {
+        assert.ok(error instanceof PreparedContextError);
+        assert.strictEqual(error.code, 'CONTEXT_CACHE_DRIFT');
+        assert.ok(Array.isArray(error.mismatches));
+        assert.ok(error.mismatches.some((m) => m.field === 'shared/late-addition.md'));
       }
     });
 

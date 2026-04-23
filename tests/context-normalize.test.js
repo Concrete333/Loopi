@@ -1,10 +1,22 @@
 const assert = require('assert');
+const os = require('os');
 const fs = require('fs').promises;
 const path = require('path');
 const { normalizeSourceFile, chunkText, extractText, getExtractor, getSourceType } = require('../src/context-normalize');
 
 let passed = 0;
 let failed = 0;
+
+function hasOptionalModule(name) {
+  try {
+    require.resolve(name);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+const HAS_ADM_ZIP = hasOptionalModule('adm-zip');
 
 async function test(name, fn) {
   try {
@@ -20,9 +32,7 @@ async function test(name, fn) {
 
 // Helper to create a temp directory
 async function createTempDir(prefix = 'tmp-norm-') {
-  const tmpDir = path.join(__dirname, prefix + Date.now());
-  await fs.mkdir(tmpDir, { recursive: true });
-  return tmpDir;
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
 async function cleanupTempDir(dir) {
@@ -132,6 +142,11 @@ console.log('context-normalize: normalizeSourceFile');
     });
 
     await test('docx extraction using a tiny generated zip fixture', async () => {
+      if (!HAS_ADM_ZIP) {
+        console.log('  [SKIP] docx extraction using a tiny generated zip fixture (adm-zip not installed)');
+        return;
+      }
+
       // Create a minimal .docx file (which is a zip with word/document.xml)
       const AdmZip = require('adm-zip');
       const zip = new AdmZip();
@@ -305,6 +320,11 @@ console.log('context-normalize: normalizeSourceFile');
     });
 
     await test('docx decodes XML entities in extracted text', async () => {
+      if (!HAS_ADM_ZIP) {
+        console.log('  [SKIP] docx decodes XML entities in extracted text (adm-zip not installed)');
+        return;
+      }
+
       const AdmZip = require('adm-zip');
       const zip = new AdmZip();
       const docXml = [

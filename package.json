@@ -15,7 +15,8 @@
     "build:pack": "powershell -ExecutionPolicy Bypass -File scripts/build-pack.ps1",
     "build:pack:verify": "powershell -ExecutionPolicy Bypass -File scripts/build-pack.ps1 -Verify",
     "test": "node tests/run-all-tests.js",
-    "measure:context": "node scripts/measure-context-delivery.js"
+    "measure:context": "node scripts/measure-context-delivery.js",
+    "context:prepare": "node src/cli.js context prepare"
   },
   "dependencies": {},
   "optionalDependencies": {

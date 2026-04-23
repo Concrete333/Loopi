@@ -210,6 +210,123 @@ function createRunFetchStub() {
   return stub;
 }
 
+function createContextFetchStub() {
+  const calls = [];
+  const stub = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === '/api/context/status') {
+      return {
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            data: {
+              ok: true,
+              status: 'config-mismatch',
+              contextDir: 'C:/project/context',
+              cacheDir: 'C:/project/context/.loopi-context',
+              builtAt: 1713888000000,
+              mismatches: [{ field: 'include', reason: 'include patterns changed' }],
+              driftedSources: [],
+              skippedSources: [{ sourceRelativePath: 'shared/slides.pptx', skipReason: 'unsupported format' }],
+              manifest: null,
+              instructions: 'Run "npm run cli -- context prepare" from the project root, then retry the run.'
+            }
+          };
+        }
+      };
+    }
+
+    if (url === '/api/context/prepare') {
+      return {
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            data: {
+              ok: true,
+              sourceCount: 3
+            }
+          };
+        }
+      };
+    }
+
+    throw new Error(`Unexpected fetch call in UI app test: ${url}`);
+  };
+
+  stub.calls = calls;
+  return stub;
+}
+
+function createBlockedRunFetchStub() {
+  const calls = [];
+  const stub = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === '/api/runs/launch') {
+      return {
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            data: {
+              success: false,
+              launched: false,
+              runId: null,
+              error: {
+                code: 'CONTEXT_CACHE_MISSING',
+                message: 'Prepared context cache is not ready.',
+                contextStatus: {
+                  ok: true,
+                  status: 'missing',
+                  contextDir: 'C:/project/context',
+                  cacheDir: 'C:/project/context/.loopi-context',
+                  mismatches: [],
+                  driftedSources: [],
+                  skippedSources: [],
+                  instructions: 'Run "npm run cli -- context prepare" from the project root, then retry the run.'
+                }
+              }
+            }
+          };
+        }
+      };
+    }
+
+    if (url === '/api/runs') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: [] };
+        }
+      };
+    }
+
+    if (url === '/api/runs/sessions') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: [] };
+        }
+      };
+    }
+
+    if (url === '/api/files/scratchpad' || url === '/api/files/log') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { filePath: url, content: '' } };
+        }
+      };
+    }
+
+    throw new Error(`Unexpected fetch call in UI app test: ${url}`);
+  };
+
+  stub.calls = calls;
+  return stub;
+}
+
 function createDraft() {
   return {
     mode: 'plan',
@@ -297,6 +414,81 @@ test('refreshProviderStatus tests the current draft instead of requiring a saved
 
   assert.ok(fetch.calls.some((call) => call.url === '/api/providers/test-task'));
   assert.strictEqual(app.state.providerStatus.providers.draftprovider.ready, true);
+});
+
+test('refreshContextStatus and prepareContext use the current draft config', async () => {
+  const document = createFakeDocument();
+  const fetch = createContextFetchStub();
+  const app = createLoopiApp({
+    document,
+    fetch,
+    navigator: {}
+  });
+
+  app.__test.setConfigRaw({
+    mode: 'plan',
+    prompt: 'Context draft',
+    agents: ['claude'],
+    context: {
+      dir: './draft-context',
+      include: ['**/*.md']
+    },
+    settings: {
+      planLoops: 1,
+      qualityLoops: 1,
+      implementLoops: 1,
+      sectionImplementLoops: 1,
+      timeoutMs: 180000,
+      continueOnError: false,
+      writeScratchpad: true
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  await app.__test.refreshContextStatus();
+  await app.__test.prepareContext();
+
+  const statusCalls = fetch.calls.filter((call) => call.url === '/api/context/status');
+  const prepareCalls = fetch.calls.filter((call) => call.url === '/api/context/prepare');
+  assert.ok(statusCalls.length >= 1);
+  assert.ok(prepareCalls.length >= 1);
+  assert.strictEqual(JSON.parse(statusCalls[0].options.body).rawConfig.context.dir, './draft-context');
+  assert.strictEqual(JSON.parse(prepareCalls[0].options.body).rawConfig.context.dir, './draft-context');
+  assert.strictEqual(app.state.contextStatus.status, 'config-mismatch');
+});
+
+test('blocked run due to missing context preparation moves the UI back to settings and stores context status', async () => {
+  const document = createFakeDocument();
+  const fetch = createBlockedRunFetchStub();
+  const app = createLoopiApp({
+    document,
+    fetch,
+    navigator: {}
+  });
+
+  app.__test.setConfigRaw({
+    mode: 'plan',
+    prompt: 'Blocked run',
+    agents: ['claude'],
+    context: {
+      dir: './context'
+    },
+    settings: {
+      planLoops: 1,
+      qualityLoops: 1,
+      implementLoops: 1,
+      sectionImplementLoops: 1,
+      timeoutMs: 180000,
+      continueOnError: false,
+      writeScratchpad: true
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  await app.__test.runCurrentConfig();
+
+  assert.strictEqual(app.state.activeTab, 'settings');
+  assert.strictEqual(app.state.contextStatus.status, 'missing');
+  assert.ok(String(app.state.lastActionError).includes('Prepared context cache'));
+  assert.ok(fetch.calls.some((call) => call.url === '/api/runs/launch'));
 });
 
 process.on('beforeExit', () => {

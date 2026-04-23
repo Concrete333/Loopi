@@ -7,6 +7,34 @@ const { atomicWriteText } = require('../atomic-write');
 const { listAvailableUseCases } = require('../use-case-loader');
 const setupService = require('../setup-service');
 const providerService = require('../provider-service');
+const { getPreparedContextStatus } = require('../context-index');
+const { prepareContextIndex } = require('../context-index');
+
+function buildBlockingContextLaunchError(status) {
+  if (!status || !status.status) {
+    return null;
+  }
+
+  const blocking = status.status === 'missing'
+    || status.status === 'config-mismatch'
+    || status.status === 'drifted';
+
+  if (!blocking) {
+    return null;
+  }
+
+  return {
+    code: status.status === 'missing' ? 'CONTEXT_CACHE_MISSING' : 'CONTEXT_CACHE_DRIFT',
+    message: status.instructions || 'Prepared context cache is not ready.',
+    contextDir: status.contextDir || null,
+    cacheDir: status.cacheDir || null,
+    instructions: status.instructions || null,
+    mismatches: Array.isArray(status.mismatches) ? status.mismatches : [],
+    driftedSources: Array.isArray(status.driftedSources) ? status.driftedSources : [],
+    skippedSources: Array.isArray(status.skippedSources) ? status.skippedSources : [],
+    contextStatus: status
+  };
+}
 
 function buildRunSummary(taskArtifact, {
   snapshotCount = 0,
@@ -266,6 +294,49 @@ class ControlPlaneService {
     }
   }
 
+  async resolveConfigInput({ rawConfig = null } = {}) {
+    const taskFile = taskPaths.legacyTaskFile(this.projectRoot);
+
+    if (rawConfig) {
+      const validation = await this.validateConfig(rawConfig);
+      if (!validation.valid) {
+        return {
+          success: false,
+          fromDraft: true,
+          taskFile,
+          normalized: null,
+          error: validation.error
+        };
+      }
+      return {
+        success: true,
+        fromDraft: true,
+        taskFile,
+        normalized: validation.normalized,
+        error: null
+      };
+    }
+
+    const configResult = await this.loadConfig();
+    if (!configResult.exists || !configResult.valid) {
+      return {
+        success: false,
+        fromDraft: false,
+        taskFile,
+        normalized: null,
+        error: configResult.error
+      };
+    }
+
+    return {
+      success: true,
+      fromDraft: false,
+      taskFile,
+      normalized: configResult.normalized,
+      error: null
+    };
+  }
+
   async saveConfig(rawConfig) {
     const validation = await this.validateConfig(rawConfig);
     if (!validation.valid) {
@@ -521,6 +592,86 @@ class ControlPlaneService {
     };
   }
 
+  async getContextStatus({ rawConfig = null } = {}) {
+    const configResult = await this.resolveConfigInput({ rawConfig });
+    if (!configResult.success) {
+      if (!configResult.fromDraft && configResult.error === 'Task file not found') {
+        return {
+          ok: true,
+          status: 'no-context',
+          state: 'no-context',
+          contextDir: null,
+          cacheDir: null,
+          builtAt: null,
+          mismatches: [],
+          driftedSources: [],
+          skippedSources: [],
+          manifest: null,
+          instructions: null
+        };
+      }
+      return {
+        ok: false,
+        status: 'invalid-config',
+        state: 'invalid-config',
+        contextDir: null,
+        cacheDir: null,
+        builtAt: null,
+        mismatches: [],
+        driftedSources: [],
+        skippedSources: [],
+        manifest: null,
+        instructions: null,
+        error: configResult.error
+      };
+    }
+
+    const contextConfig = configResult.normalized.context || null;
+    const status = await getPreparedContextStatus(contextConfig, this.projectRoot);
+    return {
+      ok: true,
+      ...status
+    };
+  }
+
+  async prepareContext({ rawConfig = null } = {}) {
+    const configResult = await this.resolveConfigInput({ rawConfig });
+    if (!configResult.success) {
+      return {
+        ok: false,
+        error: (!configResult.fromDraft && configResult.error === 'Task file not found')
+          ? 'No valid task configuration found. Save a valid config with a context folder first.'
+          : configResult.error
+      };
+    }
+
+    const contextConfig = configResult.normalized.context || null;
+    if (!contextConfig || !contextConfig.dir) {
+      return {
+        ok: false,
+        error: 'Current task configuration has no context folder configured.'
+      };
+    }
+
+    try {
+      const result = await prepareContextIndex(contextConfig, this.projectRoot);
+      return {
+        ok: true,
+        contextDir: result.rootDir,
+        cacheDir: result.cacheDir,
+        builtAt: result.builtAt,
+        sourceCount: result.manifest.sources.length,
+        stats: result.manifest.stats,
+        error: null
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error.message
+      };
+    }
+  }
+
   listRunSessions() {
     return Array.from(this.runSessions.values())
       .map((session) => buildRunSessionSummary(session))
@@ -558,6 +709,35 @@ class ControlPlaneService {
         normalized: null,
         session: null,
         error: prepared.error
+      };
+    }
+
+    const contextStatus = await this.getContextStatus({ rawConfig });
+    if (!contextStatus.ok) {
+      return {
+        success: false,
+        launched: false,
+        runId: null,
+        status: null,
+        taskFile: prepared.taskFile,
+        normalized: prepared.normalized,
+        session: null,
+        error: contextStatus.error
+      };
+    }
+
+    const contextBlock = buildBlockingContextLaunchError(contextStatus);
+    if (contextBlock) {
+      return {
+        success: false,
+        launched: false,
+        runId: null,
+        status: null,
+        taskFile: prepared.taskFile,
+        normalized: prepared.normalized,
+        session: null,
+        error: contextBlock,
+        contextStatus
       };
     }
 
@@ -660,6 +840,30 @@ class ControlPlaneService {
         normalized: null,
         taskFile,
         error: prepared.error
+      });
+    }
+
+    const contextStatus = await this.getContextStatus({ rawConfig });
+    if (!contextStatus.ok) {
+      return buildLaunchRunResult({
+        success: false,
+        launched: false,
+        run: null,
+        normalized,
+        taskFile,
+        error: contextStatus.error
+      });
+    }
+
+    const contextBlock = buildBlockingContextLaunchError(contextStatus);
+    if (contextBlock) {
+      return buildLaunchRunResult({
+        success: false,
+        launched: false,
+        run: null,
+        normalized,
+        taskFile,
+        error: contextBlock
       });
     }
 

@@ -31,6 +31,7 @@ const crypto = require('crypto');
 const { normalizeSourceFile } = require('./context-normalize');
 const {
   matchesAnyPattern,
+  normalizePatternList,
   inferPhase
 } = require('./context-glob');
 
@@ -39,6 +40,7 @@ const NORMALIZED_DIR = 'normalized';
 const MANIFEST_FILE = 'manifest.json';
 const LOCK_FILE = '.loopi.lock';
 
+// v2 added prepared-config drift metadata plus source-tree fingerprinting.
 // Bump this whenever the manifest schema changes in a way that makes cached
 // entries unsafe to reuse. A mismatch forces a full rebuild.
 const MANIFEST_SCHEMA_VERSION = 2;
@@ -122,20 +124,6 @@ async function readManifest(cacheDir) {
   }
 }
 
-function normalizePatternList(patterns) {
-  if (!Array.isArray(patterns) || patterns.length === 0) {
-    return [];
-  }
-
-  return Array.from(
-    new Set(
-      patterns
-        .map((pattern) => String(pattern || '').trim().replace(/\\/g, '/'))
-        .filter(Boolean)
-    )
-  ).sort();
-}
-
 async function writeManifest(cacheDir, manifest) {
   const manifestPath = path.join(cacheDir, MANIFEST_FILE);
   const tempPath = manifestPath + '.tmp';
@@ -186,27 +174,117 @@ function buildPreparedConfigMetadata(contextConfig, taskRootDir, contextDir) {
 
 function comparePreparedConfig(actualPreparedConfig, expectedPreparedConfig) {
   if (!actualPreparedConfig || typeof actualPreparedConfig !== 'object') {
-    return 'prepared cache metadata is missing';
+    return {
+      match: false,
+      mismatches: [{
+        kind: 'metadata',
+        field: 'preparedConfig',
+        description: 'prepared cache metadata is missing',
+        reason: 'prepared cache metadata is missing'
+      }]
+    };
   }
 
-  const issues = [];
+  const mismatches = [];
+
   const actualInclude = JSON.stringify(normalizePatternList(actualPreparedConfig.include || []));
   const expectedInclude = JSON.stringify(normalizePatternList(expectedPreparedConfig.include || []));
   if (actualInclude !== expectedInclude) {
-    issues.push('include patterns changed');
+    mismatches.push({
+      kind: 'config',
+      field: 'include',
+      description: 'include patterns changed',
+      reason: 'include patterns changed'
+    });
   }
 
   const actualExclude = JSON.stringify(normalizePatternList(actualPreparedConfig.exclude || []));
   const expectedExclude = JSON.stringify(normalizePatternList(expectedPreparedConfig.exclude || []));
   if (actualExclude !== expectedExclude) {
-    issues.push('exclude patterns changed');
+    mismatches.push({
+      kind: 'config',
+      field: 'exclude',
+      description: 'exclude patterns changed',
+      reason: 'exclude patterns changed'
+    });
   }
 
   if ((actualPreparedConfig.contextManifestPath || null) !== (expectedPreparedConfig.contextManifestPath || null)) {
-    issues.push('context manifest path changed');
+    mismatches.push({
+      kind: 'config',
+      field: 'contextManifestPath',
+      description: 'context manifest path changed',
+      reason: 'context manifest path changed'
+    });
   }
 
-  return issues.length > 0 ? issues.join(', ') : null;
+  return {
+    match: mismatches.length === 0,
+    mismatches
+  };
+}
+
+function formatMismatchSummary(mismatches) {
+  if (!Array.isArray(mismatches) || mismatches.length === 0) return '';
+  return mismatches.map((m) => m.description || m.reason || m.field || 'unknown mismatch').join(', ');
+}
+
+function buildSourceTreeFingerprintFromEntries(entries) {
+  const normalizedEntries = Array.isArray(entries)
+    ? entries
+      .filter((entry) => entry && entry.sourceRelativePath)
+      .map((entry) => ({
+        sourceRelativePath: String(entry.sourceRelativePath),
+        mtimeMs: entry.mtimeMs,
+        sizeBytes: entry.sizeBytes
+      }))
+      .sort((left, right) => left.sourceRelativePath.localeCompare(right.sourceRelativePath))
+    : [];
+
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(normalizedEntries))
+    .digest('hex');
+}
+
+/**
+ * Computes a deterministic fingerprint of the source tree that would be
+ * considered for context preparation. Used to detect added, removed, or
+ * modified source files even when context config is unchanged.
+ *
+ * Only stats files — does not read full file contents.
+ */
+async function computeSourceTreeFingerprint(contextDir, cacheDirPath, includePatterns, excludePatterns, mustExcludeRelativePaths) {
+  const sourceFiles = await walkSourceTree(contextDir, cacheDirPath);
+
+  const filteredSources = sourceFiles.filter((filePath) => {
+    const relativePath = path.relative(contextDir, filePath).replace(/\\/g, '/');
+    if (mustExcludeRelativePaths.has(relativePath)) return false;
+    if (matchesAnyPattern(relativePath, excludePatterns)) return false;
+    if (includePatterns.length > 0 && !matchesAnyPattern(relativePath, includePatterns)) return false;
+    return true;
+  });
+
+  const entries = [];
+  for (const sourcePath of filteredSources) {
+    const relativePath = path.relative(contextDir, sourcePath).replace(/\\/g, '/');
+    try {
+      const stats = await fs.stat(sourcePath);
+      if (stats.isFile()) {
+        entries.push({
+          sourceRelativePath: relativePath,
+          mtimeMs: stats.mtimeMs,
+          sizeBytes: stats.size
+        });
+      }
+    } catch (_) {
+      // File disappeared between walk and stat — skip it
+    }
+  }
+
+  entries.sort((a, b) => a.sourceRelativePath.localeCompare(b.sourceRelativePath));
+  const serialized = JSON.stringify(entries);
+  return crypto.createHash('sha256').update(serialized).digest('hex');
 }
 
 /**
@@ -386,6 +464,7 @@ async function buildCacheManifest(contextConfig, taskRootDir, contextDir, cacheD
   });
 
   const manifestSources = [];
+  const sourceFingerprintEntries = [];
   const seenCachePaths = new Set();
   let rebuilt = 0;
   let reused = 0;
@@ -409,6 +488,11 @@ async function buildCacheManifest(contextConfig, taskRootDir, contextDir, cacheD
       continue;
     }
     const stats = statResult.stats;
+    sourceFingerprintEntries.push({
+      sourceRelativePath: relativePath,
+      mtimeMs: stats.mtimeMs,
+      sizeBytes: stats.size
+    });
 
     // Fast-path reuse: if file stats match, skip the SHA-256 read entirely.
     const existing = existingEntries.get(relativePath);
@@ -529,11 +613,14 @@ async function buildCacheManifest(contextConfig, taskRootDir, contextDir, cacheD
   }
 
   await pruneOrphanChunks(cacheDir, seenCachePaths);
+  const sourceTreeFingerprint = buildSourceTreeFingerprintFromEntries(sourceFingerprintEntries);
+  preparedConfig.sourceTreeFingerprint = sourceTreeFingerprint;
 
   const manifest = {
     version: MANIFEST_SCHEMA_VERSION,
     builtAt: Date.now(),
     preparedConfig,
+    sourceTreeFingerprint,
     contextManifestPath: manifestPathInsideContext
       || manifestPath.replace(/\\/g, '/'),
     stats: { total: manifestSources.length, rebuilt, reused, skipped },
@@ -681,11 +768,14 @@ async function readPreparedContextManifest(contextDir) {
 module.exports = {
   ensureContextCache,
   readPreparedContextManifest,
+  walkSourceTree,
   CACHE_DIR_NAME,
   MANIFEST_FILE,
   MANIFEST_SCHEMA_VERSION,
   resolveContextManifestPath,
   getContextManifestRelativePath,
   buildPreparedConfigMetadata,
-  comparePreparedConfig
+  comparePreparedConfig,
+  formatMismatchSummary,
+  computeSourceTreeFingerprint
 };

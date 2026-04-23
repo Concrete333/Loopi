@@ -92,6 +92,24 @@ function matchesAnyPattern(filePath, patterns) {
 }
 
 /**
+ * Normalizes a glob list into a deterministic forward-slash-sorted array.
+ * Shared by cache metadata and any caller that wants stable pattern diffs.
+ */
+function normalizePatternList(patterns) {
+  if (!Array.isArray(patterns) || patterns.length === 0) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      patterns
+        .map((pattern) => String(pattern || '').trim().replace(/\\/g, '/'))
+        .filter(Boolean)
+    )
+  ).sort();
+}
+
+/**
  * Returns true if `relativePath` (or any directory prefix it resolves to)
  * matches one of the supplied exclusion patterns, for use by directory walkers
  * that want to skip entire subtrees like `node_modules/` or `.git/`.
@@ -146,6 +164,7 @@ module.exports = {
   globToRegex,
   matchesGlob,
   matchesAnyPattern,
+  normalizePatternList,
   matchesDirectoryExclusion,
   inferPhase
 };

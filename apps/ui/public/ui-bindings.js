@@ -151,6 +151,19 @@
         });
       }
 
+      const prepareContextButton = document.getElementById('prepare-context');
+      if (prepareContextButton) {
+        prepareContextButton.addEventListener('click', async () => actions.performAction(actions.prepareContext));
+      }
+
+      const refreshContextButton = document.getElementById('refresh-context-status');
+      if (refreshContextButton) {
+        refreshContextButton.addEventListener('click', async () => actions.performAction(async () => {
+          await actions.refreshContextStatus();
+          state.lastActionMessage = 'Context status refreshed.';
+        }));
+      }
+
       const contextDir = document.querySelector('[data-context-dir]');
       if (contextDir) {
         contextDir.addEventListener('input', () => {

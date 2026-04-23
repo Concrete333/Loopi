@@ -1,6 +1,166 @@
 # Context Guide
 
-You can attach a context folder to a task with top-level `context.dir`:
+This guide is for new users who want Loopi to work from real reference material instead of just the repo and the prompt.
+
+The short version:
+
+- your `context` folder is a curated evidence pack for the workflow
+- you organize that material into a few simple folders
+- Loopi prepares it into a generated `.loopi-context/` cache
+- later runs reuse that prepared cache until the source material changes
+
+If you treat the context folder like a dumping ground, the workflow gets noisy fast.
+
+If you treat it like a small, intentional library for the task, Loopi gets much better.
+
+## What The Context Folder Is For
+
+The context folder is where you put supporting material that should shape planning, implementation, and review.
+
+Typical examples:
+
+- design docs
+- specs
+- schemas
+- example code
+- research notes
+- review rubrics
+- contracts, policies, or requirements
+
+Think of it as "the body of evidence the agents should reason against."
+
+It is not meant to be:
+
+- a copy of your whole repo
+- a giant personal archive
+- every note you have ever written
+- a replacement for good prompts
+
+Good context is relevant, deliberate, and small enough that the selected parts stay useful.
+
+## The Mental Model
+
+Use this rule of thumb:
+
+- `shared/` is what every phase may need
+- `plan/` is what helps agents think
+- `implement/` is what helps agents build
+- `review/` is what helps agents check
+
+Loopi does not "understand everything in the folder all at once."
+
+Instead, it:
+
+1. prepares the folder into normalized text chunks
+2. selects a bounded subset by phase and budget
+3. injects only that selected material into the relevant prompts
+
+So the job of the context folder is not to be complete in some abstract sense.
+
+Its job is to make the right evidence easy to select at the right stage.
+
+## Recommended Folder Structure
+
+Use a context root like this:
+
+```text
+context/
+  shared/
+  plan/
+  implement/
+  review/
+  examples/
+  rubric/
+  schema/
+  context.json
+```
+
+What each folder means:
+
+- `shared/`: generally useful material across all phases
+- `plan/`: framing docs, strategy notes, essay plans, architecture guidance
+- `implement/`: APIs, interfaces, coding notes, technical constraints
+- `review/`: acceptance criteria, QA notes, checklists, review guidance
+- `examples/`: worked examples and reference patterns
+- `rubric/`: grading or review criteria; treated like review context
+- `schema/`: formats, interfaces, contracts; treated like implement context
+
+Use `context.json` only when you want to override a file's:
+
+- `phase`
+- `priority`
+- `purpose`
+
+You do not need a manifest for basic use.
+
+## What To Put In The Folder
+
+Good candidates:
+
+- the one design doc the feature actually depends on
+- the API contract the implementation must follow
+- two or three representative examples
+- a review rubric or acceptance checklist
+- the policy document the reviewer must enforce
+
+Bad candidates:
+
+- duplicated copies of repo files that are already in the working tree
+- outdated drafts "just in case"
+- giant folders of unrelated PDFs
+- raw exports with dozens of irrelevant files
+- every screenshot, asset, and binary from a project
+
+If a file would not change how an agent plans, implements, or reviews this task, it probably does not belong here.
+
+## Supported File Types
+
+Loopi can prepare these file types in the current context flow:
+
+| Extension(s) | Behavior |
+| --- | --- |
+| `.md`, `.txt` | read as text |
+| `.json`, `.yaml`, `.yml`, `.sql`, `.csv` | read as text |
+| `.js`, `.ts`, `.py`, `.html`, `.css` | read as text |
+| `.ipynb` | flattened into readable text |
+| `.docx` | extracted into plain text |
+| `.pdf` | extracted into plain text when text is recoverable |
+
+Unsupported or unusable files are skipped with a reason instead of silently pretending they worked.
+
+Current non-goals:
+
+- OCR for scanned or image-only PDFs
+- PowerPoint parsing such as `.ppt` or `.pptx`
+- semantic retrieval or embeddings
+
+## How To Treat `.loopi-context/`
+
+Loopi creates a generated cache inside your context root:
+
+```text
+context/
+  .loopi-context/
+    manifest.json
+    normalized/
+```
+
+Treat `.loopi-context/` like build output.
+
+- do not edit it by hand
+- do not organize files inside it manually
+- do not treat it as source material
+- do not point prompts or docs at cache paths
+
+If it gets deleted, Loopi can rebuild it the next time you prepare context.
+
+If your context root lives outside the default ignored `context/` path, make sure the generated `.loopi-context/` directory is ignored in Git for that project.
+
+For example, if you use `docs/reference-material/` as the context root, ignore `docs/reference-material/.loopi-context/` rather than assuming the default repo ignore rules will catch it.
+
+## Basic Setup In `task.json`
+
+Attach the folder with top-level `context.dir`:
 
 ```json
 "context": {
@@ -28,17 +188,113 @@ You can attach a context folder to a task with top-level `context.dir`:
 }
 ```
 
-## Folder Conventions
+You can start with just:
 
-- `shared/`: reused in every phase when budget allows
-- `plan/`: planning-specific material
-- `implement/`: implementation-specific material
-- `review/`: review-specific material
-- `examples/`: reusable examples
-- `schema/`: treated like implement-phase context
-- `rubric/`: treated like review-phase context
+```json
+"context": {
+  "dir": "./context"
+}
+```
 
-`maxFilesPerPhase` limits how many files are selected for a phase. `maxCharsPerPhase` limits the total text budget before provider-specific limits are applied.
+Then add tuning later if needed.
+
+## The Normal Workflow
+
+The intended workflow is:
+
+1. create or update the context folder
+2. prepare context
+3. run Loopi
+4. re-prepare only when the context inputs change
+
+### CLI flow
+
+Prepare once:
+
+```powershell
+npm run cli -- context prepare
+```
+
+There is also a convenience alias:
+
+```powershell
+npm run context:prepare
+```
+
+Then run normally:
+
+```powershell
+npm run cli -- run
+```
+
+### App flow
+
+In the app, the intended flow is the same:
+
+1. configure the context folder
+2. check context status
+3. click Prepare context
+4. run once the cache is ready
+
+The app should tell you whether context is:
+
+- not configured
+- missing
+- config-mismatched
+- stale
+- ready
+- ready with warnings
+
+If you try to run while context is missing or stale, the app should block the launch before creating a live run session and point you back to the Prepare context action.
+
+## When You Need To Prepare Again
+
+Prepare context again when you:
+
+- add a new source file
+- remove a source file
+- edit a source file in a way that changes the extracted text, size, or timestamp
+- change `context.include`
+- change `context.exclude`
+- switch `context.manifest`
+- change manifest overrides such as `phase`, `priority`, or `purpose`
+
+Do not get in the habit of preparing on every single run if nothing changed.
+
+The whole point of the prepared cache is reuse.
+
+## What A Good New-User Workflow Looks Like
+
+Here is a practical starter pattern:
+
+1. create `context/shared/`
+2. add one design doc or spec
+3. create `context/implement/`
+4. add one schema, API contract, or code example
+5. create `context/review/`
+6. add one checklist or acceptance rubric
+7. prepare context
+8. run Loopi
+
+That is enough to get the benefit without overbuilding the folder.
+
+## How Loopi Chooses What To Use
+
+Loopi does not inject the whole folder into every prompt.
+
+It uses folder conventions and selection budgets to choose a subset for each phase.
+
+High-level behavior:
+
+- exact phase matches come first
+- `shared/` material is reused when budget allows
+- `examples/` can be pulled in as supporting reference
+- large sources are chunked
+- one long source is capped so it cannot flood the prompt by itself
+
+This means structure matters.
+
+If you put everything in `shared/`, Loopi has less signal about what belongs where.
 
 ## Delivery Policy
 
@@ -66,131 +322,134 @@ Stage defaults:
 | `implementReview` | `full` |
 | `implementRepair` | `digest` |
 
-## Key Notes
+Useful guidance:
 
-- `reviewSynthesis` governs plan-mode synthesis, review-mode synthesis, and one-shot review synthesis.
-- `deliveryPolicy.default` is a starting value, not a lock.
-- `reviewParallel` still defaults to `full`. If review-mode token usage is your main cost driver, `reviewParallel: "digest"` is the highest-signal override to try first.
-- The digest is built mechanically from the selected files, so it stays compact without a second summarization pass.
-- `maxInputChars` on a provider limits the rendered digest section, not the entire final prompt.
-- Runtime `[context]` log lines report actual emitted context chars and note later-cycle downgrades such as `(cycle 2 downgrade from full)`.
-- Set `LOOPI_SILENT=1` to suppress those log lines in CI or scripted runs.
-- Set a stage to `none` to omit context entirely for that step.
+- use `full` when direct source text matters
+- use `digest` when you want lower token cost
+- use `none` only when a stage can safely run without direct context
 
-## Tuning Workflow
+Key notes:
 
-1. Measure a baseline with `npm run measure:context`.
-2. If review-mode cost is the main issue, try `reviewParallel: "digest"` first.
-3. For broader savings, try `deliveryPolicy.default: "digest"` and then restore specific stages such as `implementInitial` or `reviewInitial` to `full`.
-4. Use `none` only for stages that are safe without direct context.
+- `reviewSynthesis` governs plan-mode synthesis, review-mode synthesis, and one-shot review synthesis
+- `deliveryPolicy.default` is a starting value, not a lock
+- `reviewParallel: "digest"` is usually the highest-signal cost-saving override
+- `maxInputChars` limits the rendered digest section, not the entire prompt
 
-If you want more control, set `context.manifest` to a JSON manifest file. Manifest entries can annotate files with `phase`, `priority`, or `purpose`, and those annotations are merged into the context index during selection.
+## Manifest Overrides
 
-## Prepared Context Cache
+If folder placement is not enough, set `context.manifest` to a JSON manifest file.
 
-Loopi builds a **prepared context cache** inside your context directory at `.loopi-context/`. This cache normalizes and chunks source files so that:
+Manifest entries can override:
 
-- **PDF, DOCX, and Jupyter Notebook** files are extracted into plain text
-- **Large extracted text** is split into fixed-size chunks (default 2500 chars with 200-char overlap)
-- **Code and text files** (`.js`, `.ts`, `.py`, `.md`, `.txt`, etc.) pass through as plain text
-- The active manifest/control file is used for overrides, but is **not** exposed as promptable context
+- `phase`
+- `priority`
+- `purpose`
 
-Treat `.loopi-context/` as generated output. Do not edit it by hand.
+Use overrides sparingly.
 
-### Prepare Once, Reuse Across Runs
+If you find yourself overriding everything, the folder structure is probably doing too little work.
 
-Prepare the cache explicitly:
+## What Preparation Actually Does
+
+When you prepare context, Loopi:
+
+1. scans the context root using your include/exclude rules
+2. skips generated/internal paths such as `.loopi-context/`
+3. normalizes supported files into plain text
+4. chunks large sources into deterministic windows
+5. records source metadata in `.loopi-context/manifest.json`
+6. reuses unchanged prepared outputs on later prepares
+
+The prepared cache is a reusable project artifact for this context root.
+
+`prepareContextIndex(...)` builds or refreshes that artifact. `buildContextIndex(...)` consumes it later during runs. They are intentionally separate so Loopi can reuse prepared context across many runs instead of rebuilding it every time.
+
+Chunked sources still show up in prompts using the original source path, not the cache path.
+
+Example prompt labels:
+
+```text
+--- context/shared/spec.pdf [chunk 1/3] - Requirements ---
+--- context/shared/spec.pdf [chunk 2/3] - Constraints ---
+```
+
+## How To Keep The Folder Healthy
+
+Good habits:
+
+- prefer a few strong files over many weak ones
+- remove stale documents when they stop helping
+- keep examples representative, not numerous
+- put review criteria in `review/` or `rubric/`
+- put interface details in `implement/` or `schema/`
+- re-prepare after meaningful context changes
+
+Bad habits:
+
+- leaving old drafts beside current docs with similar names
+- mixing planning, implementation, and review material in one pile
+- assuming skipped files were successfully used
+- committing generated cache output accidentally
+
+## Troubleshooting
+
+### "Prepared context cache not available"
+
+Your prepared cache is missing or stale.
+
+Prepare again:
 
 ```powershell
 npm run cli -- context prepare
 ```
 
-That command reads the current task's `context` config, scans the context root once, writes `.loopi-context/`, and records the preparation inputs in `manifest.json`.
+Or use the app's Prepare context action.
 
-After that, normal runs consume the prepared cache directly instead of rebuilding it on every Loopi run.
+### A file is not showing up in prompts
 
-Re-run `npm run cli -- context prepare` when you:
+Check:
 
-- add, remove, or edit files in the context root
-- change `context.include` or `context.exclude`
-- switch `context.manifest`
-- edit manifest annotations such as `phase`, `priority`, or `purpose`
+1. is it in a supported format?
+2. is it inside the context root?
+3. was it excluded by your include/exclude rules?
+4. was it skipped during prepare?
+5. is it in the right phase folder?
 
-If the prepared cache is missing or no longer matches the current task's context config, Loopi stops with a clear message telling you to prepare it again.
+### A PDF or DOCX was skipped
 
-### What the prepare step does
+The extractor may have failed, the dependency may be missing, or the file may not contain usable text.
 
-When `npm run cli -- context prepare` runs, it:
-
-1. Scans the context folder for all files matching your `include` / `exclude` patterns
-2. Skips `node_modules/`, `.git/`, `.loopi-context/`, and the active manifest/control file automatically
-3. Normalizes each source file using the appropriate extractor
-4. Chunks large normalized text into fixed-window segments
-5. Writes chunk files under `.loopi-context/normalized/` with a `manifest.json`
-6. On subsequent prepares, only rebuilds sources whose content or manifest metadata changed
-
-Chunked sources are still selected through the normal phase/shared/examples flow, but Loopi also applies a small per-source chunk cap during selection so one long source cannot flood the prompt by itself.
-
-### Supported file types
-
-| Extension(s) | Extractor | Behavior |
-| --- | --- | --- |
-| `.md`, `.txt` | passthrough | Content extracted unchanged |
-| `.json`, `.yaml`, `.yml`, `.sql`, `.csv` | passthrough | Content extracted unchanged |
-| `.js`, `.ts`, `.py`, `.html`, `.css` | passthrough | Content extracted unchanged |
-| `.ipynb` | ipynb flattener | Markdown cells as prose, code cells as fenced blocks |
-| `.docx` | docx extractor | Plain text extracted from DOCX (requires `adm-zip`) |
-| `.pdf` | pdf extractor | Plain text extracted from PDF (requires `pdf-parse`) |
-| Other | skipped | Marked as skipped; not included in context |
-
-If extraction fails, a dependency is missing, or a file does not produce usable text, Loopi marks that source as skipped with a clear reason in the cache manifest instead of silently injecting partial content. Those skipped-source diagnostics also flow into normal `context-selection` artifacts during a run, so unsupported or OCR-only files do not disappear without explanation.
-
-### Cache directory structure
-
-```
-context/
-  .loopi-context/
-    manifest.json          # Source inventory with hashes and chunk metadata
-    normalized/
-      shared/
-        guidelines.md__chunk-001.md
-        large-doc.md__chunk-001.md
-        large-doc.md__chunk-002.md
-        notebook.ipynb__chunk-001.md
-```
-
-### Chunk labels in prompts
-
-When chunks reach the prompt, they are labelled with the **original source path** plus chunk metadata, and with a section label when Loopi can infer one:
-
-```
---- context/shared/large-doc.md [chunk 1/3] - Assessment Details ---
---- context/shared/large-doc.md [chunk 2/3] - Literature Review ---
---- context/shared/large-doc.md [chunk 3/3] - Submission Rules ---
-```
-
-Single-chunk files display without a chunk suffix, and section labels appear only when Loopi can infer a useful heading.
-
-### Optional dependencies
-
-PDF and DOCX extraction require optional dependencies. Install them with:
+Optional dependencies for PDF and DOCX extraction:
 
 ```bash
 npm install pdf-parse adm-zip
 ```
 
-If these packages are missing, PDF and DOCX files are marked as skipped during the prepare step. The cache still works for all other file types.
+### Review mode is too expensive
 
-### Current non-goals
+Start by trying:
 
-The prepared context cache is intentionally a middle ground, not a full retrieval system. Today it does **not** do any of the following:
+```json
+"deliveryPolicy": {
+  "reviewParallel": "digest"
+}
+```
 
-- OCR for scanned or image-only PDFs
-- PowerPoint or slide deck parsing such as `.ppt` or `.pptx`
-- Semantic retrieval, embeddings, reranking, or vector search
+Then measure with:
 
-If you need those behaviors later, they should be added explicitly as a follow-on feature rather than assumed from the current cache pipeline.
+```powershell
+npm run measure:context
+```
 
-### Cache invalidation
+## Quick Start Checklist
 
-The cache is **content-aware** during preparation: it uses SHA-256 hashes to detect source changes, and it also hashes the active manifest/control file so metadata edits invalidate affected cache reuse. Editing a source file or changing manifest annotations will rebuild the affected sources the next time you run `npm run cli -- context prepare`. Deleting `.loopi-context/` also forces a full rebuild the next time you prepare.
+1. create `context/`
+2. add a few relevant files in `shared/`, `implement/`, and `review/`
+3. set `"context": { "dir": "./context" }` in `shared/task.json`
+4. run `npm run cli -- context prepare`
+5. run Loopi
+6. re-prepare when the context inputs change
+
+That is the whole shape of it.
+
+The context folder is not there to be clever. It is there to keep the workflow grounded in the right evidence, with just enough structure that Loopi can use it well.

@@ -215,6 +215,12 @@ If your task uses a prepared `context` root, build the reusable context cache on
 npm run cli -- context prepare
 ```
 
+The shorter alias works too:
+
+```powershell
+npm run context:prepare
+```
+
 If you prefer a browser-based setup flow, launch the local UI:
 
 ```powershell
@@ -222,6 +228,8 @@ npm run ui
 ```
 
 That starts a localhost control plane for setup checks, task configuration, presets, and run monitoring. The UI now treats broken saved task files as first-class errors instead of hiding them, the Runs tab shows live background sessions while a run is still in flight, and the Setup tab can launch explicit install/login helpers for supported adapters. See [docs/ui.md](docs/ui.md) for the screen-by-screen guide.
+
+If you configure `context` in the UI, the Settings tab can check draft-aware context status, prepare the cache in place, and block run launch early when the prepared cache is missing or stale instead of starting a doomed session.
 
 Typical flow:
 
@@ -402,7 +410,7 @@ See [LICENSE](./LICENSE) for the full license text and [LICENSING.md](./LICENSIN
 ## Troubleshooting
 
 - Run `npm run cli -- doctor` first. Without a task file it performs an environment/setup check; with `shared/task.json` present it also validates the task configuration and selected agents.
-- If your task uses `context`, run `npm run cli -- context prepare` after changing context files, include/exclude patterns, or manifest annotations.
+- If your task uses `context`, run `npm run cli -- context prepare` after changing context files, include/exclude patterns, or manifest annotations. `npm run context:prepare` is the equivalent shortcut.
 - If an agent is installed but not detected, set the matching `LOOPI_*` override.
 - To find an installed CLI path on Windows, use `where.exe claude`, `where.exe codex`, `where.exe gemini`, and so on.
 - On macOS or Linux, use `which claude`, `which codex`, `which gemini`, and so on.

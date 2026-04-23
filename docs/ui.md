@@ -72,11 +72,40 @@ The Settings tab edits the current task configuration through the same backend v
 Use it to:
 
 - adjust general task settings such as timeout, scratchpad behavior, and context usage
+- check context cache readiness status (not configured, missing, drifted, ready, ready with warnings)
+- prepare or re-prepare context directly from the UI
 - enable or disable supported agents
 - configure HTTP providers
 - review or edit the raw JSON when you want the exact persisted shape
 
 If the saved task file is invalid, Settings shows the blocking error state instead of a normal editor. That panel includes the saved file path, the validation error, the raw file contents, and a `Start New Draft` action.
+
+#### Context Status
+
+The status panel works from the current draft config, not just the last saved file.
+
+That means you can change `context.dir`, include/exclude rules, or manifest settings in Settings and check or prepare against that draft before saving.
+
+When a context folder is configured, the Settings screen shows a status indicator with one of these states:
+
+- **Ready** (green): the prepared cache is usable and up to date
+- **Ready with warnings** (yellow): usable but some sources were skipped during preparation
+- **Drifted** (red): the prepared cache no longer matches the current context inputs (config or source-tree changes)
+- **Config mismatch** (red): the configured context rules changed and the cache must be prepared again
+- **Not prepared** (red): context is configured but no cache exists yet
+
+The status area also shows:
+
+- the build timestamp
+- drift details when the cache is stale
+- skipped file counts with reasons when warnings are present
+
+Two actions are available:
+
+- **Prepare Context** (primary when drifted/missing, secondary when ready) triggers a cache build
+- **Refresh Status** re-checks the current cache state without rebuilding
+
+If you click **Run Now** while context is missing or stale, the UI blocks launch before starting a live run session, returns you to Settings, and shows the current context status with the next action.
 
 ### Task Composer
 

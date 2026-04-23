@@ -1,7 +1,9 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { validateProviderAssignments, __test } = require('../../src/orchestrator');
 const { prepareContextIndex } = require('../../src/context-index');
+const taskPaths = require('../../src/task-paths');
 const {
   assert,
   PROJECT_ROOT,
@@ -613,6 +615,77 @@ module.exports = async function registerReadinessTests(test) {
     } finally {
       orchestrator.runPlanMode = originalRunPlanMode;
       fs.rmSync(tempContextDir, { recursive: true, force: true });
+    }
+  });
+
+  await test('runTask fails before writing task artifacts when prepared context cache is missing', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'loopi-readiness-missing-'));
+    const contextDir = path.join(projectRoot, 'context');
+    const sharedDir = path.join(projectRoot, 'shared');
+    try {
+      fs.mkdirSync(path.join(contextDir, 'shared'), { recursive: true });
+      fs.mkdirSync(sharedDir, { recursive: true });
+      fs.writeFileSync(path.join(contextDir, 'shared', 'notes.md'), 'Missing cache context.', 'utf8');
+      fs.writeFileSync(path.join(sharedDir, 'task.json'), JSON.stringify({
+        mode: 'plan',
+        prompt: 'Test prompt',
+        agents: ['claude'],
+        context: {
+          dir: './context'
+        }
+      }, null, 2));
+
+      const orchestrator = new LoopiOrchestrator({ projectRoot });
+      await orchestrator.init();
+
+      await assert.rejects(
+        () => orchestrator.runTask(),
+        (error) => /npm run cli -- context prepare/.test(error.message)
+      );
+
+      assert.strictEqual(orchestrator.lastRun, null);
+      const taskIds = await orchestrator.collaborationStore.listTaskIds();
+      assert.deepStrictEqual(taskIds, []);
+      assert.strictEqual(fs.existsSync(taskPaths.runsNdjsonFile(projectRoot)), false);
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  await test('runTask fails before writing task artifacts when prepared context cache is drifted', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'loopi-readiness-drift-'));
+    const contextDir = path.join(projectRoot, 'context');
+    const sharedDir = path.join(projectRoot, 'shared');
+    try {
+      fs.mkdirSync(path.join(contextDir, 'shared'), { recursive: true });
+      fs.mkdirSync(sharedDir, { recursive: true });
+      fs.writeFileSync(path.join(contextDir, 'shared', 'notes.md'), 'Prepared cache baseline.', 'utf8');
+      fs.writeFileSync(path.join(sharedDir, 'task.json'), JSON.stringify({
+        mode: 'plan',
+        prompt: 'Test prompt',
+        agents: ['claude'],
+        context: {
+          dir: './context'
+        }
+      }, null, 2));
+
+      await prepareContextIndex({ dir: './context' }, projectRoot);
+      fs.writeFileSync(path.join(contextDir, 'shared', 'later.md'), 'Added after prepare.', 'utf8');
+
+      const orchestrator = new LoopiOrchestrator({ projectRoot });
+      await orchestrator.init();
+
+      await assert.rejects(
+        () => orchestrator.runTask(),
+        (error) => /context prepare/.test(error.message)
+      );
+
+      assert.strictEqual(orchestrator.lastRun, null);
+      const taskIds = await orchestrator.collaborationStore.listTaskIds();
+      assert.deepStrictEqual(taskIds, []);
+      assert.strictEqual(fs.existsSync(taskPaths.runsNdjsonFile(projectRoot)), false);
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
     }
   });
 };

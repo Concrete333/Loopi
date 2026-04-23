@@ -21,6 +21,22 @@
 
     let sessionPollTimer = null;
 
+    function actionErrorMessage(errorLike) {
+      if (!errorLike) {
+        return 'Unknown error.';
+      }
+      if (typeof errorLike === 'string') {
+        return errorLike;
+      }
+      if (typeof errorLike.message === 'string' && errorLike.message.trim() !== '') {
+        return errorLike.message;
+      }
+      if (typeof errorLike.instructions === 'string' && errorLike.instructions.trim() !== '') {
+        return errorLike.instructions;
+      }
+      return 'Unknown error.';
+    }
+
     async function refreshBootstrap() {
       state.bootstrap = await api('/api/bootstrap');
     }
@@ -191,6 +207,7 @@
       state.lastActionError = '';
       await refreshConfig();
       await refreshProviderStatus();
+      await refreshContextStatus();
       render();
     }
 
@@ -202,8 +219,18 @@
         body: JSON.stringify({ rawConfig: state.configRaw })
       });
       if (!result.success) {
-        state.lastActionError = result.error || 'Run failed.';
-        state.lastActionMessage = result.runId ? `Run ${result.runId} failed.` : '';
+        state.lastActionError = actionErrorMessage(result.error) || 'Run failed.';
+        state.lastActionMessage = (result.error && result.error.code && String(result.error.code).startsWith('CONTEXT_'))
+          ? 'Context preparation is required before running.'
+          : (result.runId ? `Run ${result.runId} failed.` : '');
+        if (result.contextStatus) {
+          state.contextStatus = result.contextStatus;
+        } else if (result.error && result.error.contextStatus) {
+          state.contextStatus = result.error.contextStatus;
+        }
+        if (result.error && result.error.code && String(result.error.code).startsWith('CONTEXT_')) {
+          state.activeTab = 'settings';
+        }
       } else {
         state.lastActionMessage = `Run ${result.runId} started.`;
         state.lastActionError = '';
@@ -260,6 +287,34 @@
       render();
     }
 
+    async function refreshContextStatus() {
+      if (state.configRaw && typeof state.configRaw === 'object' && !state.persistedConfigBlocked) {
+        state.contextStatus = await api('/api/context/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rawConfig: state.configRaw })
+        });
+        return;
+      }
+
+      state.contextStatus = await api('/api/context/status');
+    }
+
+    async function prepareContext() {
+      const result = await api('/api/context/prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rawConfig: state.configRaw && !state.persistedConfigBlocked ? state.configRaw : null
+        })
+      });
+      if (!result.ok) {
+        throw new Error(result.error || 'Context preparation failed.');
+      }
+      await refreshContextStatus();
+      state.lastActionMessage = `Context prepared: ${result.sourceCount} sources indexed.`;
+    }
+
     async function init() {
       try {
         await refreshBootstrap();
@@ -268,7 +323,8 @@
           refreshSetup(),
           refreshProviderStatus(),
           refreshRuns(),
-          refreshFiles()
+          refreshFiles(),
+          refreshContextStatus()
         ]);
       } catch (error) {
         state.lastActionError = error.message;
@@ -299,7 +355,9 @@
       runCurrentConfig,
       savePreset,
       ensureProviderStatus,
-      performAction
+      performAction,
+      refreshContextStatus,
+      prepareContext
     };
   }
 

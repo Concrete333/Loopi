@@ -1,4 +1,5 @@
 const assert = require('assert');
+const os = require('os');
 const fs = require('fs').promises;
 const path = require('path');
 const { buildContextIndex, prepareContextIndex } = require('../src/context-index');
@@ -11,6 +12,17 @@ const {
 
 let passed = 0;
 let failed = 0;
+
+function hasOptionalModule(name) {
+  try {
+    require.resolve(name);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+const HAS_ADM_ZIP = hasOptionalModule('adm-zip');
 
 async function test(name, fn) {
   try {
@@ -25,9 +37,7 @@ async function test(name, fn) {
 }
 
 async function createTempDir(prefix = 'tmp-context-use-case-') {
-  const tmpDir = path.join(__dirname, prefix + Date.now());
-  await fs.mkdir(tmpDir, { recursive: true });
-  return tmpDir;
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
 async function cleanupTempDir(dir) {
@@ -82,6 +92,10 @@ async function writeJson(filePath, value) {
 }
 
 async function writeMinimalDocx(filePath, paragraphs) {
+  if (!HAS_ADM_ZIP) {
+    throw new Error('adm-zip is required to build DOCX fixtures');
+  }
+
   const AdmZip = require('adm-zip');
   const zip = new AdmZip();
   const docXml = [
@@ -104,6 +118,11 @@ console.log('context-use-cases: prepared root smoke tests');
 
   try {
     await test('Academic paper prepared root flows through cache, selection, and prompting', async () => {
+      if (!HAS_ADM_ZIP) {
+        console.log('  [SKIP] Academic paper prepared root flows through cache, selection, and prompting (adm-zip not installed)');
+        return;
+      }
+
       tmpDir = await createTempDir();
       await fs.mkdir(path.join(tmpDir, 'shared'), { recursive: true });
       await fs.mkdir(path.join(tmpDir, 'plan'), { recursive: true });

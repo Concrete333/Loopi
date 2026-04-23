@@ -1,10 +1,22 @@
 const assert = require('assert');
+const os = require('os');
 const fs = require('fs').promises;
 const path = require('path');
 const { ensureContextCache, CACHE_DIR_NAME, MANIFEST_FILE, MANIFEST_SCHEMA_VERSION } = require('../src/context-cache');
 
 let passed = 0;
 let failed = 0;
+
+function hasOptionalModule(name) {
+  try {
+    require.resolve(name);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+const HAS_ADM_ZIP = hasOptionalModule('adm-zip');
 
 async function test(name, fn) {
   try {
@@ -19,9 +31,7 @@ async function test(name, fn) {
 }
 
 async function createTempDir(prefix = 'tmp-cache-') {
-  const tmpDir = path.join(__dirname, prefix + Date.now());
-  await fs.mkdir(tmpDir, { recursive: true });
-  return tmpDir;
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
 async function cleanupTempDir(dir) {
@@ -51,6 +61,8 @@ console.log('context-cache: ensureContextCache');
       assert.ok(manifest.builtAt);
       assert.deepStrictEqual(manifest.preparedConfig.include, ['**/*.md']);
       assert.deepStrictEqual(manifest.preparedConfig.exclude, []);
+      assert.ok(typeof manifest.sourceTreeFingerprint === 'string' && manifest.sourceTreeFingerprint.length > 0);
+      assert.strictEqual(manifest.preparedConfig.sourceTreeFingerprint, manifest.sourceTreeFingerprint);
       assert.ok(Array.isArray(manifest.sources));
       assert.ok(manifest.sources.length > 0);
 
@@ -330,6 +342,11 @@ console.log('context-cache: ensureContextCache');
     });
 
     await test('Cache build handles docx files correctly', async () => {
+      if (!HAS_ADM_ZIP) {
+        console.log('  [SKIP] Cache build handles docx files correctly (adm-zip not installed)');
+        return;
+      }
+
       tmpDir = await createTempDir();
       await fs.mkdir(path.join(tmpDir, 'shared'), { recursive: true });
 

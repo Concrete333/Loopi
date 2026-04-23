@@ -270,6 +270,68 @@ test('context prepare delegates to context preparation helper and prints summary
   assert.match(stdout.read(), /Sources: total=4, rebuilt=2, reused=1, skipped=1/);
 });
 
+test('context prepare prints skipped sources with reasons when preparation completes with warnings', async () => {
+  const projectRoot = createTempProject('loopi-cli-context-skips-');
+  const sharedDir = path.join(projectRoot, 'shared');
+  fs.mkdirSync(sharedDir, { recursive: true });
+  fs.writeFileSync(path.join(sharedDir, 'task.json'), JSON.stringify({
+    mode: 'plan',
+    prompt: 'Prepare context with skips',
+    agents: ['claude'],
+    context: {
+      dir: '.',
+      include: ['**/*']
+    }
+  }, null, 2));
+
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+
+  const exitCode = await runCli(['context', 'prepare'], {
+    projectRoot,
+    stdout,
+    stderr,
+    prepareContext: async (contextConfig, root) => ({
+      rootDir: root,
+      cacheDir: path.join(root, '.loopi-context'),
+      builtAt: Date.parse('2026-04-23T12:00:00.000Z'),
+      manifest: {
+        stats: {
+          total: 3,
+          rebuilt: 1,
+          reused: 1,
+          skipped: 2
+        },
+        sources: [
+          {
+            sourceRelativePath: 'shared/ok.md',
+            skipped: false
+          },
+          {
+            sourceRelativePath: 'shared/slides.pptx',
+            skipped: true,
+            skipReason: 'unsupported format'
+          },
+          {
+            sourceRelativePath: 'review/scanned.pdf',
+            skipped: true,
+            skipReason: 'extractor returned no usable text'
+          }
+        ]
+      }
+    })
+  });
+
+  assert.strictEqual(exitCode, 0);
+  assert.strictEqual(stderr.read(), '');
+  assert.match(stdout.read(), /Preparation completed with warnings: 2 sources were skipped\./);
+  assert.match(stdout.read(), /Skipped sources:/);
+  assert.match(stdout.read(), /shared\/slides\.pptx: unsupported format/);
+  assert.match(stdout.read(), /review\/scanned\.pdf: extractor returned no usable text/);
+  assert.match(stdout.read(), /Skipped files are not indexed\./);
+  assert.match(stdout.read(), /Runs will now reuse this prepared context until the source files, include\/exclude rules, or manifest overrides change\./);
+});
+
 test('context prepare reports when the current task has no context config', async () => {
   const projectRoot = createTempProject('loopi-cli-context-missing-');
   const sharedDir = path.join(projectRoot, 'shared');

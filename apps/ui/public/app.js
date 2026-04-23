@@ -53,7 +53,8 @@ function createLoopiApp(env = {}) {
     lastActionMessage: '',
     lastActionError: '',
     presetDraftName: '',
-    rawEditorText: ''
+    rawEditorText: '',
+    contextStatus: null
   };
 
   const dom = {
@@ -161,6 +162,9 @@ function createLoopiApp(env = {}) {
       validateCurrentConfig: actions.validateCurrentConfig,
       refreshProviderStatus: actions.refreshProviderStatus,
       refreshRuns: actions.refreshRuns,
+      refreshContextStatus: actions.refreshContextStatus,
+      prepareContext: actions.prepareContext,
+      runCurrentConfig: actions.runCurrentConfig,
       activeValidationMessage: uiState.activeValidationMessage,
       getPanelHtml(panelName) {
         if (panelName === 'hero') {
