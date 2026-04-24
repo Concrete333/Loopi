@@ -29,6 +29,46 @@
       roleSelect
     } = deps;
 
+    function isPending(name) {
+      return Boolean(state.pendingActions && state.pendingActions[name]);
+    }
+
+    function pendingAttr(name) {
+      return isPending(name) ? ' disabled aria-busy="true"' : '';
+    }
+
+    function pendingLabel(name, defaultLabel, busyLabel) {
+      return isPending(name) ? busyLabel : defaultLabel;
+    }
+
+    function contextBlockerBanner() {
+      const blocker = state.contextBlocker;
+      if (!blocker) {
+        return '';
+      }
+      const message = escapeHtml(blocker.message || 'Prepared context is not ready.');
+      const instructions = blocker.instructions
+        ? `<p class="muted">${escapeHtml(blocker.instructions)}</p>`
+        : '';
+      // Offer a real navigation button (not just prose) when the user is on a
+      // tab other than Settings. This is the "clear Go to Settings action or
+      // link rather than force-switching tabs" requirement from Phase 5 step 9.
+      const gotoAction = state.activeTab !== 'settings'
+        ? '<button class="button button--secondary" data-goto-tab="settings">Go to Settings</button>'
+        : '';
+      return `
+        <div class="message message--error">
+          <strong>Run blocked by prepared-context state.</strong>
+          <p>${message}</p>
+          ${instructions}
+          <div class="button-row">
+            ${gotoAction}
+            <button class="button button--ghost" data-dismiss-context-blocker>Dismiss</button>
+          </div>
+        </div>
+      `;
+    }
+
     function formatBuiltAt(value) {
       if (value === null || value === undefined || value === '') {
         return '';
@@ -64,7 +104,11 @@
       } else if (cs.status === 'drifted') {
         chips.push('<span class="chip chip--danger">Drifted</span>');
       } else if (cs.status === 'missing') {
-        chips.push('<span class="chip chip--danger">Not prepared</span>');
+        if (!cs.cacheDir) {
+          chips.push('<span class="chip chip--danger">Context path invalid</span>');
+        } else {
+          chips.push('<span class="chip chip--danger">Not prepared</span>');
+        }
       } else if (cs.status === 'config-mismatch') {
         chips.push('<span class="chip chip--danger">Config mismatch</span>');
       } else {
@@ -104,35 +148,67 @@
           '</div>'
         : '';
 
-      const needsPrepare = cs.status === 'missing' || cs.status === 'drifted' || cs.status === 'config-mismatch';
+      const isBlocking = cs.status === 'missing' || cs.status === 'drifted' || cs.status === 'config-mismatch';
+      const isMissingDir = cs.status === 'missing' && !cs.cacheDir;
+
+      const instructionsBlock = (isBlocking && cs.instructions)
+        ? '<div class="message message--' + (isMissingDir ? 'error' : 'warning') + '">' + escapeHtml(cs.instructions) + '</div>'
+        : '';
+
+      const prepareBusy = isPending('prepareContext');
+      const prepareEmphasis = isMissingDir
+        ? 'secondary'
+        : (isBlocking ? 'primary' : 'secondary');
+      const prepareDefaultLabel = isMissingDir
+        ? 'Prepare Context'
+        : (isBlocking ? 'Prepare Context' : 'Re-prepare Context');
+      const prepareButton = '<button class="button button--' + prepareEmphasis + '" id="prepare-context"'
+        + pendingAttr('prepareContext') + '>'
+        + (prepareBusy ? 'Preparing…' : prepareDefaultLabel)
+        + '</button>';
+
       return '<div class="chip-row" style="margin-bottom:0.5rem">' + chips.join('') + '</div>' +
-        mismatchList + driftedList + skippedList +
+        instructionsBlock + mismatchList + driftedList + skippedList +
         '<div class="button-row">' +
-          '<button class="button button--' + (needsPrepare ? 'primary' : 'secondary') + '" id="prepare-context">' +
-            (needsPrepare ? 'Prepare Context' : 'Re-prepare Context') +
-          '</button>' +
+          prepareButton +
           '<button class="button button--ghost" id="refresh-context-status">Refresh Status</button>' +
         '</div>';
     }
 
     function renderHeroSummary() {
+      const hasInitErrors = Array.isArray(state.initErrors) && state.initErrors.length > 0;
+      if (!state.setupStatus && !state.providerStatus && !hasInitErrors) {
+        dom.heroSummary.innerHTML = '<div class="hero-stats"><p class="muted">Loading status\u2026</p></div>';
+        return;
+      }
       const adapters = state.setupStatus && Array.isArray(state.setupStatus.adapters) ? state.setupStatus.adapters : [];
       const providers = state.providerStatus && state.providerStatus.providers ? Object.values(state.providerStatus.providers) : [];
       const runs = Array.isArray(state.runs) ? state.runs : [];
+      const adapterSummary = state.setupStatus
+        ? `${adapters.filter((item) => item.ready).length}/${adapters.length}`
+        : 'Unavailable';
+      const providerSummary = state.providerStatus
+        ? String(providers.length)
+        : 'Unavailable';
+      const startupNotice = hasInitErrors
+        ? `<div class="message message--warning">Some startup checks failed. Loaded data is still shown where available.</div>
+           <div class="button-row"><button class="button button--ghost" id="retry-init-status"${pendingAttr('retryInit')}>${escapeHtml(pendingLabel('retryInit', 'Retry Startup Checks', 'Retrying…'))}</button></div>`
+        : '';
       dom.heroSummary.innerHTML = `
         <div class="hero-stats">
           <div class="stat-strip">
             <span class="muted">Adapters ready</span>
-            <strong>${adapters.filter((item) => item.ready).length}/${adapters.length || 0}</strong>
+            <strong>${escapeHtml(adapterSummary)}</strong>
           </div>
           <div class="stat-strip">
             <span class="muted">Providers configured</span>
-            <strong>${providers.length}</strong>
+            <strong>${escapeHtml(providerSummary)}</strong>
           </div>
           <div class="stat-strip">
             <span class="muted">Recorded runs</span>
             <strong>${runs.length}</strong>
           </div>
+          ${startupNotice}
         </div>
       `;
     }
@@ -150,20 +226,20 @@
               <div class="section-heading">
                 <div>
                   <h3>${escapeHtml(adapter.displayName || adapter.agentId || adapter.id)}</h3>
-                  <p>${escapeHtml(adapter.metadata && adapter.metadata.docsUrl ? adapter.metadata.docsUrl : 'CLI adapter')}</p>
+                  <p>Local CLI adapter</p>
                 </div>
                 ${statusChip(adapter.status, adapter.ready)}
               </div>
               <div class="stack">
                   <div class="chip-row">
                     <span class="chip chip--neutral">${escapeHtml(adapter.agentId || adapter.id)}</span>
-                    ${adapter.resolvedPath ? `<span class="chip chip--neutral">${escapeHtml(adapter.resolvedPath)}</span>` : ''}
+                    ${adapter.resolvedPath ? `<span class="chip chip--neutral chip--path" title="${escapeHtml(adapter.resolvedPath)}">${escapeHtml(adapter.resolvedPath)}</span>` : ''}
                   </div>
                   ${adapter.errorMessage ? `<div class="message message--error">${escapeHtml(adapter.errorMessage)}</div>` : ''}
                   <div class="split-actions">
-                    ${adapter.metadata && adapter.metadata.docsUrl ? `<a class="button button--ghost" href="${escapeHtml(adapter.metadata.docsUrl)}" target="_blank" rel="noreferrer">Docs</a>` : ''}
+                    ${adapter.metadata && adapter.metadata.docsUrl ? `<a class="button button--ghost" href="${escapeHtml(adapter.metadata.docsUrl)}" target="_blank" rel="noreferrer">Startup Help</a>` : ''}
                     ${adapter.nextAction && adapter.nextAction.type === 'install' && adapter.metadata && adapter.metadata.installCommand
-                      ? `<button class="button button--primary" data-adapter-install="${escapeHtml(adapter.id)}" data-command-text="${escapeHtml(adapter.metadata.installCommand.command)}">Install In Loopi</button>`
+                      ? `<button class="button button--primary" data-adapter-install="${escapeHtml(adapter.id)}" data-command-text="${escapeHtml(adapter.metadata.installCommand.command)}">Install</button>`
                       : ''}
                     ${adapter.nextAction && adapter.nextAction.type === 'login' && adapter.metadata && adapter.metadata.loginCommand
                       ? `<button class="button button--primary" data-adapter-login="${escapeHtml(adapter.id)}" data-command-text="${escapeHtml(adapter.metadata.loginCommand.shellCommand)}">Launch Login</button>`
@@ -193,7 +269,7 @@
                 </div>
                 ${provider.errorMessage ? `<div class="message message--error">${escapeHtml(provider.errorMessage)}</div>` : ''}
                 <div class="button-row">
-                  <button class="button button--secondary" data-provider-test="${escapeHtml(providerId)}">Test Provider</button>
+                  <button class="button button--secondary" data-provider-test="${escapeHtml(providerId)}"${pendingAttr('provider:' + providerId)}>${escapeHtml(pendingLabel('provider:' + providerId, 'Test Provider', 'Testing…'))}</button>
                 </div>
               </div>
             </article>
@@ -278,7 +354,7 @@
                 </div>
                 <div class="field">
                   <label>API Key</label>
-                  <input data-provider-field="${escapeHtml(providerId)}:apiKey" value="${escapeHtml(provider.apiKey || '')}">
+                  <input data-provider-field="${escapeHtml(providerId)}:apiKey" type="password" autocomplete="off" value="${escapeHtml(provider.apiKey || '')}">
                 </div>
                 <div class="field">
                   <label>Health Endpoint</label>
@@ -353,6 +429,7 @@
           </div>
         ` : ''}
         ${activeValidationMessage()}
+        ${contextBlockerBanner()}
         <div class="grid grid--double">
           <div class="inline-panel">
             <div class="field">
@@ -498,7 +575,7 @@
       const useCases = state.bootstrap && Array.isArray(state.bootstrap.useCases) ? state.bootstrap.useCases : [];
       const mode = state.configRaw.mode || 'plan';
 
-      const executionOptions = executionTargets().map((target) => `<option value="${escapeHtml(target)}">${escapeHtml(target)}</option>`).join('');
+      const executionTargetList = executionTargets();
       const useCaseField = (mode === 'plan' || mode === 'one-shot')
         ? `
           <div class="field">
@@ -571,25 +648,26 @@
             </div>
             ${state.advanced ? `
               <div class="field-grid">
-                ${roleSelect('planner', roles.planner || '', executionOptions)}
-                ${roleSelect('implementer', roles.implementer || '', executionOptions)}
-                ${roleSelect('reviewer', roles.reviewer || '', executionOptions)}
-                ${roleSelect('fallback', roles.fallback || '', executionOptions)}
+                ${roleSelect('planner', roles.planner || '', executionTargetList)}
+                ${roleSelect('implementer', roles.implementer || '', executionTargetList)}
+                ${roleSelect('reviewer', roles.reviewer || '', executionTargetList)}
+                ${roleSelect('fallback', roles.fallback || '', executionTargetList)}
               </div>
             ` : '<p class="muted">Switch on advanced view to override role assignments explicitly.</p>'}
           </div>
         </div>
 
+        ${contextBlockerBanner()}
         <div class="inline-panel">
           <div class="field">
             <label>Preset name</label>
             <input id="preset-name" placeholder="my-safe-plan" value="${escapeHtml(state.presetDraftName || '')}">
           </div>
           <div class="button-row">
-            <button class="button button--secondary" id="validate-config">Validate</button>
-            <button class="button button--ghost" id="save-config">Save Task</button>
-            <button class="button button--primary" id="run-config">Run Now</button>
-            <button class="button button--ghost" id="save-preset">Save As Preset</button>
+            <button class="button button--secondary" id="validate-config"${pendingAttr('validate')}>${escapeHtml(pendingLabel('validate', 'Validate', 'Validating…'))}</button>
+            <button class="button button--ghost" id="save-config"${pendingAttr('save')}>${escapeHtml(pendingLabel('save', 'Save Task', 'Saving…'))}</button>
+            <button class="button button--primary" id="run-config"${pendingAttr('run')}>${escapeHtml(pendingLabel('run', 'Run Now', 'Launching…'))}</button>
+            <button class="button button--ghost" id="save-preset"${pendingAttr('savePreset')}>${escapeHtml(pendingLabel('savePreset', 'Save As Preset', 'Saving Preset…'))}</button>
           </div>
         </div>
       `;

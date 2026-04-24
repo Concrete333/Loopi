@@ -153,6 +153,11 @@ async function serveStatic(req, res, pathname) {
     sendText(res, 200, MIME_TYPES[ext] || 'application/octet-stream', content);
   } catch (error) {
     if (error && error.code === 'ENOENT') {
+      const ext = path.extname(normalized).toLowerCase();
+      if (ext && ext !== '.html') {
+        sendText(res, 404, 'text/plain; charset=utf-8', 'Not found');
+        return;
+      }
       try {
         const fallback = await fs.readFile(path.join(STATIC_ROOT, 'index.html'));
         sendText(res, 200, MIME_TYPES['.html'], fallback);
@@ -426,16 +431,25 @@ async function main() {
   console.log('Press Ctrl+C to stop.');
 }
 
+function handleMainError(error) {
+  if (error && error.code === 'EADDRINUSE') {
+    const port = error.port || DEFAULT_PORT;
+    console.error(`Port ${port} is already in use.`);
+    console.error(`Try: npm run ui -- --port ${port + 1}`);
+  } else {
+    console.error(error.message || String(error));
+  }
+  process.exitCode = 1;
+}
+
 if (require.main === module) {
-  main().catch((error) => {
-    console.error(error.message);
-    process.exitCode = 1;
-  });
+  main().catch(handleMainError);
 }
 
 module.exports = {
   createControlPlaneServer,
   startControlPlaneServer,
+  handleMainError,
   DEFAULT_HOST,
   DEFAULT_PORT
 };

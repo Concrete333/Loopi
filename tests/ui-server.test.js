@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
-const { startControlPlaneServer } = require('../src/control-plane/server');
+const { startControlPlaneServer, handleMainError } = require('../src/control-plane/server');
 
 let passed = 0;
 let failed = 0;
@@ -76,6 +76,16 @@ function requestText(baseUrl, routePath) {
       });
     }).on('error', reject);
   });
+}
+
+async function waitFor(checkFn, { attempts = 20, delayMs = 10 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (checkFn()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return false;
 }
 
 console.log('ui-server: local control-plane web app');
@@ -430,6 +440,301 @@ test('run launch short-circuits with a structured context error before creating 
     const sessionsResponse = await requestJson(started.url, 'GET', '/api/runs/sessions');
     assert.strictEqual(sessionsResponse.statusCode, 200);
     assert.deepStrictEqual(sessionsResponse.body.data, []);
+
+    // Phase 1: blocked launch must not persist the draft to shared/task.json
+    const taskFilePath = path.join(projectRoot, 'shared', 'task.json');
+    assert.strictEqual(fs.existsSync(taskFilePath), false, 'blocked launch must not write task.json');
+  } finally {
+    await new Promise((resolve) => started.server.close(resolve));
+    cleanupProjectRoot(projectRoot);
+  }
+});
+
+test('successful launch with rawConfig persists the task file after preflight passes', async () => {
+  const projectRoot = createProjectRoot();
+  const contextDir = path.join(projectRoot, 'context');
+  fs.mkdirSync(contextDir, { recursive: true });
+  fs.writeFileSync(path.join(contextDir, 'notes.md'), '# Ready context\nWill prepare first.');
+
+  const started = await startControlPlaneServer({ projectRoot, port: 0 });
+  try {
+    // Prepare context so the launch is not blocked
+    const draftConfig = {
+      mode: 'plan',
+      prompt: 'Successful launch test',
+      agents: ['claude'],
+      context: { dir: './context' }
+    };
+    await requestJson(started.url, 'POST', '/api/context/prepare', {
+      rawConfig: draftConfig
+    });
+
+    // Stub the orchestrator to avoid needing real CLI agents
+    started.service.createOrchestrator = () => ({
+      init: async () => {},
+      runTask: async () => ({
+        runId: 'run-test-success',
+        status: 'completed',
+        mode: 'plan',
+        prompt: 'Successful launch test',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 1000,
+        error: null
+      })
+    });
+
+    const launchResponse = await requestJson(started.url, 'POST', '/api/runs/launch', {
+      rawConfig: draftConfig
+    });
+    assert.strictEqual(launchResponse.statusCode, 200);
+    assert.strictEqual(launchResponse.body.ok, true);
+    assert.strictEqual(launchResponse.body.data.success, true);
+    assert.strictEqual(launchResponse.body.data.launched, true);
+
+    // Phase 1: successful launch must persist the draft to shared/task.json
+    const taskFilePath = path.join(projectRoot, 'shared', 'task.json');
+    assert.strictEqual(fs.existsSync(taskFilePath), true, 'successful launch must write task.json');
+    const savedContent = JSON.parse(fs.readFileSync(taskFilePath, 'utf8'));
+    assert.strictEqual(savedContent.mode, 'plan');
+    assert.strictEqual(savedContent.prompt, 'Successful launch test');
+  } finally {
+    await new Promise((resolve) => started.server.close(resolve));
+    cleanupProjectRoot(projectRoot);
+  }
+});
+
+test('launch without rawConfig uses the saved task file and does not re-persist', async () => {
+  const projectRoot = createProjectRoot();
+  const contextDir = path.join(projectRoot, 'context');
+  const sharedDir = path.join(projectRoot, 'shared');
+  fs.mkdirSync(contextDir, { recursive: true });
+  fs.mkdirSync(sharedDir, { recursive: true });
+  fs.writeFileSync(path.join(contextDir, 'notes.md'), '# Saved config context\nAlready persisted.');
+  const savedConfig = {
+    mode: 'plan',
+    prompt: 'Previously saved task',
+    agents: ['claude'],
+    context: { dir: 'context' }
+  };
+  fs.writeFileSync(path.join(sharedDir, 'task.json'), JSON.stringify(savedConfig, null, 2) + '\n');
+
+  const started = await startControlPlaneServer({ projectRoot, port: 0 });
+  try {
+    // Prepare context from the saved task file
+    await requestJson(started.url, 'POST', '/api/context/prepare', {});
+
+    // Record the original file metadata/content so we can prove it was not rewritten.
+    const taskFilePath = path.join(sharedDir, 'task.json');
+    const rawBefore = fs.readFileSync(taskFilePath, 'utf8');
+    const statBefore = fs.statSync(taskFilePath);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Stub the orchestrator
+    started.service.createOrchestrator = () => ({
+      init: async () => {},
+      runTask: async () => ({
+        runId: 'run-test-saved',
+        status: 'completed',
+        mode: 'plan',
+        prompt: 'Previously saved task',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 500,
+        error: null
+      })
+    });
+
+    const launchResponse = await requestJson(started.url, 'POST', '/api/runs/launch', {});
+    assert.strictEqual(launchResponse.statusCode, 200);
+    assert.strictEqual(launchResponse.body.ok, true);
+    assert.strictEqual(launchResponse.body.data.success, true);
+    assert.strictEqual(launchResponse.body.data.launched, true);
+
+    // The task file should still exist and must not have been rewritten.
+    const rawAfter = fs.readFileSync(taskFilePath, 'utf8');
+    const statAfter = fs.statSync(taskFilePath);
+    assert.strictEqual(rawAfter, rawBefore);
+    assert.strictEqual(statAfter.mtimeMs, statBefore.mtimeMs, 'launch without rawConfig must not rewrite task.json');
+
+    const savedAfter = JSON.parse(fs.readFileSync(taskFilePath, 'utf8'));
+    assert.strictEqual(savedAfter.prompt, 'Previously saved task');
+  } finally {
+    await new Promise((resolve) => started.server.close(resolve));
+    cleanupProjectRoot(projectRoot);
+  }
+});
+
+test('background run session records sane failure payloads for odd thrown values', async () => {
+  const projectRoot = createProjectRoot();
+  const contextDir = path.join(projectRoot, 'context');
+  fs.mkdirSync(contextDir, { recursive: true });
+  fs.writeFileSync(path.join(contextDir, 'notes.md'), '# Background wrapper test');
+
+  const started = await startControlPlaneServer({ projectRoot, port: 0 });
+  try {
+    const draftConfig = {
+      mode: 'plan',
+      prompt: 'Odd thrown value session test',
+      agents: ['claude'],
+      context: { dir: './context' }
+    };
+    await requestJson(started.url, 'POST', '/api/context/prepare', {
+      rawConfig: draftConfig
+    });
+
+    started.service.createOrchestrator = () => ({
+      init: async () => {},
+      runTask: async () => {
+        throw null;
+      }
+    });
+
+    const launchResult = await started.service.launchRunSession({
+      rawConfig: draftConfig
+    });
+    assert.strictEqual(launchResult.success, true);
+    assert.strictEqual(launchResult.launched, true);
+
+    const settled = await waitFor(() => {
+      const snapshot = started.service.getRunSession(launchResult.runId);
+      return snapshot.exists && snapshot.session && snapshot.session.active === false;
+    });
+    assert.strictEqual(settled, true, 'background session should settle inactive after the failure');
+
+    const sessionSnapshot = started.service.getRunSession(launchResult.runId);
+    assert.strictEqual(sessionSnapshot.exists, true);
+    assert.strictEqual(sessionSnapshot.session.active, false);
+    assert.strictEqual(sessionSnapshot.session.status, 'failed');
+    assert.deepStrictEqual(sessionSnapshot.session.error, { message: 'Unknown error.' });
+  } finally {
+    await new Promise((resolve) => started.server.close(resolve));
+    cleanupProjectRoot(projectRoot);
+  }
+});
+
+test('missing .js asset returns 404 instead of SPA fallback', async () => {
+  const projectRoot = createProjectRoot();
+  const started = await startControlPlaneServer({ projectRoot, port: 0 });
+  try {
+    const response = await requestText(started.url, '/nonexistent-module.js');
+    assert.strictEqual(response.statusCode, 404);
+    assert.ok(!response.body.includes('Loopi Control Plane'), 'must not return HTML for missing .js');
+    assert.strictEqual(response.body.trim(), 'Not found');
+  } finally {
+    await new Promise((resolve) => started.server.close(resolve));
+    cleanupProjectRoot(projectRoot);
+  }
+});
+
+test('missing .css asset returns 404 instead of SPA fallback', async () => {
+  const projectRoot = createProjectRoot();
+  const started = await startControlPlaneServer({ projectRoot, port: 0 });
+  try {
+    const response = await requestText(started.url, '/missing-styles.css');
+    assert.strictEqual(response.statusCode, 404);
+    assert.ok(!response.body.includes('Loopi Control Plane'), 'must not return HTML for missing .css');
+  } finally {
+    await new Promise((resolve) => started.server.close(resolve));
+    cleanupProjectRoot(projectRoot);
+  }
+});
+
+test('missing dotted non-html asset returns 404 instead of SPA fallback', async () => {
+  const projectRoot = createProjectRoot();
+  const started = await startControlPlaneServer({ projectRoot, port: 0 });
+  try {
+    const response = await requestText(started.url, '/missing-source.map');
+    assert.strictEqual(response.statusCode, 404);
+    assert.ok(!response.body.includes('Loopi Control Plane'), 'must not return HTML for missing dotted assets');
+    assert.strictEqual(response.body.trim(), 'Not found');
+  } finally {
+    await new Promise((resolve) => started.server.close(resolve));
+    cleanupProjectRoot(projectRoot);
+  }
+});
+
+test('extensionless unknown route still serves the app shell', async () => {
+  const projectRoot = createProjectRoot();
+  const started = await startControlPlaneServer({ projectRoot, port: 0 });
+  try {
+    const response = await requestText(started.url, '/some-deep-route');
+    assert.strictEqual(response.statusCode, 200);
+    assert.ok(response.body.includes('Loopi Control Plane'), 'extensionless route should serve SPA shell');
+  } finally {
+    await new Promise((resolve) => started.server.close(resolve));
+    cleanupProjectRoot(projectRoot);
+  }
+});
+
+test('handleMainError produces helpful EADDRINUSE message', () => {
+  const originalExitCode = process.exitCode;
+  const error = new Error('listen EADDRINUSE: address already in use');
+  error.code = 'EADDRINUSE';
+  error.port = 4311;
+  const output = [];
+  const origError = console.error;
+  console.error = (msg) => output.push(msg);
+  try {
+    handleMainError(error);
+  } finally {
+    console.error = origError;
+    process.exitCode = originalExitCode;
+  }
+  assert.ok(output.some((line) => line.includes('4311')), 'should mention the port');
+  assert.ok(output.some((line) => line.includes('4312')), 'should suggest alternative port');
+});
+
+test('prepare result includes indexedCount and skippedCount when sources are skipped', async () => {
+  const projectRoot = createProjectRoot();
+  const ctxDir = path.join(projectRoot, 'context');
+  const sharedDir = path.join(projectRoot, 'shared');
+  fs.mkdirSync(ctxDir, { recursive: true });
+  fs.mkdirSync(sharedDir, { recursive: true });
+  fs.writeFileSync(path.join(ctxDir, 'good.md'), 'hello');
+  fs.writeFileSync(path.join(ctxDir, 'bad.bin'), Buffer.from([0xff, 0xfe]));
+  fs.writeFileSync(path.join(sharedDir, 'task.json'), JSON.stringify({
+    prompt: 'p', mode: 'plan', agents: ['claude'],
+    context: { dir: './context' }
+  }));
+  const started = await startControlPlaneServer({ projectRoot, port: 0 });
+  try {
+    const response = await requestJson(started.url, 'POST', '/api/context/prepare', {});
+    assert.strictEqual(response.statusCode, 200);
+    const result = response.body.data;
+    assert.strictEqual(result.ok, true);
+    assert.ok(typeof result.indexedCount === 'number', 'indexedCount should be a number');
+    assert.ok(typeof result.skippedCount === 'number', 'skippedCount should be a number');
+    assert.strictEqual(result.indexedCount + result.skippedCount, result.sourceCount,
+      'indexedCount + skippedCount should equal sourceCount');
+    if (result.skippedCount > 0) {
+      assert.ok(Array.isArray(result.skippedSources), 'skippedSources should be an array');
+      assert.strictEqual(result.skippedSources.length, result.skippedCount);
+      assert.ok(result.skippedSources[0].sourceRelativePath, 'skipped source should have path');
+      assert.ok(result.skippedSources[0].skipReason, 'skipped source should have reason');
+    }
+  } finally {
+    await new Promise((resolve) => started.server.close(resolve));
+    cleanupProjectRoot(projectRoot);
+  }
+});
+
+test('prepare error preserves structured error details from PreparedContextError', async () => {
+  const projectRoot = createProjectRoot();
+  const sharedDir = path.join(projectRoot, 'shared');
+  fs.mkdirSync(sharedDir, { recursive: true });
+  fs.writeFileSync(path.join(sharedDir, 'task.json'), JSON.stringify({
+    prompt: 'p', mode: 'plan', agents: ['claude'],
+    context: { dir: './nonexistent-context' }
+  }));
+  const started = await startControlPlaneServer({ projectRoot, port: 0 });
+  try {
+    const response = await requestJson(started.url, 'POST', '/api/context/prepare', {});
+    assert.strictEqual(response.statusCode, 200);
+    const result = response.body.data;
+    assert.strictEqual(result.ok, false);
+    assert.ok(result.error, 'should have an error message');
+    assert.ok(result.error.includes('does not exist'), 'error should mention directory issue');
   } finally {
     await new Promise((resolve) => started.server.close(resolve));
     cleanupProjectRoot(projectRoot);

@@ -1,4 +1,5 @@
 const fs = require('fs').promises;
+const path = require('path');
 const taskPaths = require('./task-paths');
 const { LoopiOrchestrator } = require('./orchestrator');
 const { normalizeTaskConfig } = require('./task-config');
@@ -73,10 +74,20 @@ function writeRunStartInfo(stdout, intro) {
 async function openScratchpad({
   projectRoot,
   stdout,
-  readFile
+  readFile,
+  readdir = fs.readdir
 }) {
   const scratchpadFile = taskPaths.legacyScratchpadFile(projectRoot);
   writeLine(stdout, `Scratchpad path: ${scratchpadFile}`);
+
+  // Surface the latest V2 run directory so users know where the structured
+  // run record lives in addition to the legacy scratchpad. V2 task IDs are
+  // ISO-timestamp prefixed and sort lexicographically, so the max entry is
+  // the most recent run.
+  const latestRunDir = await findLatestV2RunDir({ projectRoot, readdir });
+  if (latestRunDir) {
+    writeLine(stdout, `Latest run directory: ${latestRunDir}`);
+  }
 
   let content;
   try {
@@ -102,6 +113,32 @@ async function openScratchpad({
   }
 
   return 0;
+}
+
+async function findLatestV2RunDir({ projectRoot, readdir }) {
+  const tasksRoot = taskPaths.tasksRootDir(projectRoot);
+  let entries;
+  try {
+    entries = await readdir(tasksRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return null;
+    }
+    // Surface unexpected errors by returning null rather than failing the
+    // open command; the legacy scratchpad path is still the primary output.
+    return null;
+  }
+
+  const dirNames = entries
+    .filter((entry) => entry && typeof entry.isDirectory === 'function' && entry.isDirectory())
+    .map((entry) => entry.name);
+
+  if (dirNames.length === 0) {
+    return null;
+  }
+
+  dirNames.sort((a, b) => b.localeCompare(a));
+  return path.join(tasksRoot, dirNames[0]);
 }
 
 async function runCurrentTask({

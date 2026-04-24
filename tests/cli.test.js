@@ -1809,6 +1809,229 @@ test('process-level smoke: preset save and use work end-to-end', async () => {
   });
 });
 
+test('doctor task mode flags a missing prepared-context cache', async () => {
+  const { runDoctorCheck } = require('../src/cli-doctor');
+
+  const result = await runDoctorCheck({
+    projectRoot: PROJECT_ROOT,
+    mode: 'task',
+    readFile: async () => JSON.stringify({
+      mode: 'review',
+      prompt: 'Review with context',
+      agents: ['claude'],
+      context: { dir: './context' }
+    }),
+    normalizeConfig: () => ({
+      mode: 'review',
+      agents: ['claude'],
+      context: { dir: './context' },
+      settings: { cwd: PROJECT_ROOT, timeoutMs: 1000 },
+      providers: {},
+      executionTargets: ['claude']
+    }),
+    resolveCliAgents: async () => {},
+    checkContextReadiness: async () => ({
+      status: 'missing',
+      contextDir: '/fake/context',
+      cacheDir: '/fake/context/.loopi-context',
+      builtAt: null,
+      mismatches: [],
+      driftedSources: [],
+      skippedSources: [],
+      manifest: null,
+      instructions: 'Run `npm run cli -- context prepare` before running the task.'
+    })
+  });
+
+  assert.strictEqual(result.ok, false,
+    'doctor should fail when the prepared-context cache is missing');
+  assert.ok(result.lines.some((line) => line.includes('Prepared context cache is missing')),
+    'lines should mention the missing cache');
+  assert.ok(result.lines.some((line) => line.includes('context prepare')),
+    'lines should point the user at the prepare command');
+});
+
+test('doctor task mode flags an invalid context directory without suggesting prepare first', async () => {
+  const { runDoctorCheck } = require('../src/cli-doctor');
+
+  const result = await runDoctorCheck({
+    projectRoot: PROJECT_ROOT,
+    mode: 'task',
+    readFile: async () => JSON.stringify({
+      mode: 'review',
+      prompt: 'Review with bad context path',
+      agents: ['claude'],
+      context: { dir: './missing-context' }
+    }),
+    normalizeConfig: () => ({
+      mode: 'review',
+      agents: ['claude'],
+      context: { dir: './missing-context' },
+      settings: { cwd: PROJECT_ROOT, timeoutMs: 1000 },
+      providers: {},
+      executionTargets: ['claude']
+    }),
+    resolveCliAgents: async () => {},
+    checkContextReadiness: async () => ({
+      status: 'missing',
+      contextDir: '/fake/missing-context',
+      cacheDir: null,
+      builtAt: null,
+      mismatches: [],
+      driftedSources: [],
+      skippedSources: [],
+      manifest: null,
+      instructions: 'context.dir does not exist: /fake/missing-context'
+    })
+  });
+
+  assert.strictEqual(result.ok, false,
+    'doctor should fail when the context path itself is invalid');
+  assert.ok(result.lines.some((line) => line.includes('Context folder is missing or invalid')),
+    'lines should describe the invalid directory');
+  assert.ok(result.lines.some((line) => line.includes('Fix `context.dir`')),
+    'lines should tell the user to fix the configured path');
+  assert.ok(!result.lines.some((line) => line.includes('context prepare')),
+    'lines should not suggest prepare before the path is fixed');
+});
+
+test('doctor task mode flags a drifted prepared-context cache', async () => {
+  const { runDoctorCheck } = require('../src/cli-doctor');
+
+  const result = await runDoctorCheck({
+    projectRoot: PROJECT_ROOT,
+    mode: 'task',
+    readFile: async () => JSON.stringify({
+      mode: 'review',
+      prompt: 'Review with drifted context',
+      agents: ['claude'],
+      context: { dir: './context' }
+    }),
+    normalizeConfig: () => ({
+      mode: 'review',
+      agents: ['claude'],
+      context: { dir: './context' },
+      settings: { cwd: PROJECT_ROOT, timeoutMs: 1000 },
+      providers: {},
+      executionTargets: ['claude']
+    }),
+    resolveCliAgents: async () => {},
+    checkContextReadiness: async () => ({
+      status: 'drifted',
+      contextDir: '/fake/context',
+      cacheDir: '/fake/context/.loopi-context',
+      builtAt: '2026-04-22T00:00:00Z',
+      mismatches: [],
+      driftedSources: [
+        { sourceRelativePath: 'plan/notes.md', change: 'modified' }
+      ],
+      skippedSources: [],
+      manifest: null,
+      instructions: 'Source tree has changed. Run "npm run cli -- context prepare" to rebuild.'
+    })
+  });
+
+  assert.strictEqual(result.ok, false,
+    'doctor should fail when the prepared-context cache has drifted');
+  assert.ok(result.lines.some((line) => line.includes('out of date')),
+    'lines should describe the cache as out of date');
+  assert.ok(result.lines.some((line) => line.includes('1 drifted source')),
+    'lines should include the drift count');
+});
+
+test('doctor task mode stays green when prepared context is ready', async () => {
+  const { runDoctorCheck } = require('../src/cli-doctor');
+
+  const result = await runDoctorCheck({
+    projectRoot: PROJECT_ROOT,
+    mode: 'task',
+    readFile: async () => JSON.stringify({
+      mode: 'review',
+      prompt: 'Review ready context',
+      agents: ['claude'],
+      context: { dir: './context' }
+    }),
+    normalizeConfig: () => ({
+      mode: 'review',
+      agents: ['claude'],
+      context: { dir: './context' },
+      settings: { cwd: PROJECT_ROOT, timeoutMs: 1000 },
+      providers: {},
+      executionTargets: ['claude']
+    }),
+    resolveCliAgents: async () => {},
+    checkContextReadiness: async () => ({
+      status: 'ready',
+      contextDir: '/fake/context',
+      cacheDir: '/fake/context/.loopi-context',
+      builtAt: '2026-04-23T08:00:00Z',
+      mismatches: [],
+      driftedSources: [],
+      skippedSources: [],
+      manifest: null,
+      instructions: null
+    })
+  });
+
+  assert.strictEqual(result.ok, true,
+    'doctor should succeed when the prepared-context cache is ready');
+  assert.ok(result.lines.some((line) => line.includes('Prepared context cache is ready')),
+    'lines should include the ready confirmation');
+});
+
+test('open command points at the latest V2 run directory when tasks exist', async () => {
+  const projectRoot = createTempProject('aibridge-open-latest-');
+  const tasksRoot = path.join(projectRoot, 'shared', 'tasks');
+  fs.mkdirSync(path.join(tasksRoot, 'run-2026-04-23T10-00-00-000Z'), { recursive: true });
+  fs.mkdirSync(path.join(tasksRoot, 'run-2026-04-23T11-00-00-000Z'), { recursive: true });
+  fs.mkdirSync(path.join(tasksRoot, 'run-2026-04-23T09-00-00-000Z'), { recursive: true });
+
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+
+  const exitCode = await runCli(['open'], {
+    projectRoot,
+    stdout,
+    stderr,
+    readFile: async () => {
+      const error = new Error('missing');
+      error.code = 'ENOENT';
+      throw error;
+    }
+  });
+
+  const output = stdout.read();
+  assert.strictEqual(exitCode, 0);
+  assert.match(output, /Latest run directory:/);
+  assert.ok(output.includes('run-2026-04-23T11-00-00-000Z'),
+    'should surface the newest run directory lexicographically');
+  assert.ok(!output.includes('run-2026-04-23T09-00-00-000Z'),
+    'should not print the older run directories');
+});
+
+test('open command omits the latest run directory line when no V2 runs exist', async () => {
+  const projectRoot = createTempProject('aibridge-open-no-runs-');
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+
+  const exitCode = await runCli(['open'], {
+    projectRoot,
+    stdout,
+    stderr,
+    readFile: async () => {
+      const error = new Error('missing');
+      error.code = 'ENOENT';
+      throw error;
+    }
+  });
+
+  assert.strictEqual(exitCode, 0);
+  const output = stdout.read();
+  assert.ok(!output.includes('Latest run directory:'),
+    'open should not announce a latest run when shared/tasks is absent');
+  assert.match(output, /No scratchpad exists yet\./);
+});
+
 process.on('exit', () => {
   for (const projectRoot of tempDirs) {
     fs.rmSync(projectRoot, { recursive: true, force: true });

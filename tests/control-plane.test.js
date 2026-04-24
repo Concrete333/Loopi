@@ -733,6 +733,89 @@ test('launchRun validates, saves, and runs via the orchestrator contract', async
   }
 });
 
+test('launchRun does not persist a raw draft when context preflight blocks the launch', async () => {
+  const projectRoot = createTestProject();
+  try {
+    const contextDir = path.join(projectRoot, 'context');
+    fs.mkdirSync(contextDir, { recursive: true });
+    fs.writeFileSync(path.join(contextDir, 'notes.md'), '# Missing prepare\nDirect launch should block.');
+
+    const service = new ControlPlaneService({ projectRoot });
+    const taskFilePath = taskPaths.legacyTaskFile(projectRoot);
+
+    const result = await service.launchRun({
+      rawConfig: {
+        mode: 'plan',
+        prompt: 'Blocked direct launch',
+        agents: ['claude'],
+        context: { dir: './context' }
+      }
+    });
+
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.launched, false);
+    assert.strictEqual(result.run, null);
+    assert.strictEqual(result.error.code, 'CONTEXT_CACHE_MISSING');
+    assert.strictEqual(fs.existsSync(taskFilePath), false, 'blocked direct launch must not write task.json');
+  } finally {
+    cleanupProject(projectRoot);
+  }
+});
+
+test('launchRun persists the draft only after context preflight passes', async () => {
+  const projectRoot = createTestProject();
+  try {
+    const contextDir = path.join(projectRoot, 'context');
+    fs.mkdirSync(contextDir, { recursive: true });
+    fs.writeFileSync(path.join(contextDir, 'notes.md'), '# Ready context\nPrepared before direct launch.');
+
+    const draftConfig = {
+      mode: 'plan',
+      prompt: 'Prepared direct launch',
+      agents: ['claude'],
+      context: { dir: './context' }
+    };
+
+    const service = new ControlPlaneService({ projectRoot });
+    const prepareResult = await service.prepareContext({ rawConfig: draftConfig });
+    assert.strictEqual(prepareResult.ok, true);
+
+    const calls = [];
+    service.createOrchestrator = () => ({
+      lastRun: null,
+      async init() {
+        calls.push('init');
+      },
+      async runTask() {
+        calls.push('runTask');
+        const run = {
+          runId: 'run-direct-context',
+          mode: 'plan',
+          status: 'completed',
+          startedAt: '2026-04-22T12:00:00Z',
+          finishedAt: '2026-04-22T12:01:00Z',
+          durationMs: 60000,
+          error: null
+        };
+        this.lastRun = run;
+        return run;
+      }
+    });
+
+    const result = await service.launchRun({ rawConfig: draftConfig });
+    assert.deepStrictEqual(calls, ['init', 'runTask']);
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.launched, true);
+
+    const taskFilePath = taskPaths.legacyTaskFile(projectRoot);
+    assert.strictEqual(fs.existsSync(taskFilePath), true, 'successful direct launch must write task.json');
+    const savedContent = JSON.parse(fs.readFileSync(taskFilePath, 'utf8'));
+    assert.strictEqual(savedContent.prompt, 'Prepared direct launch');
+  } finally {
+    cleanupProject(projectRoot);
+  }
+});
+
 test('launchRun returns validation errors without launching', async () => {
   const projectRoot = createTestProject();
   try {

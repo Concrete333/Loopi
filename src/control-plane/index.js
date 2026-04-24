@@ -1,4 +1,5 @@
 const fs = require('fs').promises;
+const path = require('path');
 const { normalizeTaskConfig } = require('../task-config');
 const taskPaths = require('../task-paths');
 const { CollaborationStore } = require('../collaboration-store');
@@ -9,6 +10,20 @@ const setupService = require('../setup-service');
 const providerService = require('../provider-service');
 const { getPreparedContextStatus } = require('../context-index');
 const { prepareContextIndex } = require('../context-index');
+
+function contextBlockerCode(status) {
+  if (status.status === 'drifted' || status.status === 'config-mismatch') {
+    return 'CONTEXT_CACHE_DRIFT';
+  }
+  // status.status === 'missing': distinguish "directory does not exist" from
+  // "directory exists but cache has never been built" by whether a cacheDir
+  // is known. getPreparedContextStatus only populates cacheDir when the
+  // context directory resolved.
+  if (!status.cacheDir) {
+    return 'CONTEXT_MISSING_DIR';
+  }
+  return 'CONTEXT_CACHE_MISSING';
+}
 
 function buildBlockingContextLaunchError(status) {
   if (!status || !status.status) {
@@ -24,7 +39,7 @@ function buildBlockingContextLaunchError(status) {
   }
 
   return {
-    code: status.status === 'missing' ? 'CONTEXT_CACHE_MISSING' : 'CONTEXT_CACHE_DRIFT',
+    code: contextBlockerCode(status),
     message: status.instructions || 'Prepared context cache is not ready.',
     contextDir: status.contextDir || null,
     cacheDir: status.cacheDir || null,
@@ -33,6 +48,50 @@ function buildBlockingContextLaunchError(status) {
     driftedSources: Array.isArray(status.driftedSources) ? status.driftedSources : [],
     skippedSources: Array.isArray(status.skippedSources) ? status.skippedSources : [],
     contextStatus: status
+  };
+}
+
+// Error codes task-config.js attaches to context-path errors. Matching on
+// these is preferable to matching on error-message prefixes; keep the string
+// fallback only as a defensive net if an error somehow loses its code.
+const CONTEXT_PATH_ERROR_CODES = new Set([
+  'CONTEXT_DIR_MISSING',
+  'CONTEXT_DIR_NOT_DIRECTORY'
+]);
+
+function isContextPathError({ errorCode, errorMessage }) {
+  if (errorCode && CONTEXT_PATH_ERROR_CODES.has(errorCode)) {
+    return true;
+  }
+  const trimmed = typeof errorMessage === 'string' ? errorMessage.trim() : '';
+  return trimmed.startsWith('context.dir does not exist:')
+    || trimmed.startsWith('context.dir must resolve to a directory:');
+}
+
+function buildInvalidContextStatusFromConfigError({ errorMessage, errorCode, errorDetails, rawConfig, projectRoot }) {
+  if (!rawConfig || !rawConfig.context || typeof rawConfig.context.dir !== 'string') {
+    return null;
+  }
+
+  if (!isContextPathError({ errorCode, errorMessage })) {
+    return null;
+  }
+
+  const contextDir = (errorDetails && typeof errorDetails.contextDir === 'string')
+    ? errorDetails.contextDir
+    : path.resolve(projectRoot, rawConfig.context.dir);
+  const trimmedError = typeof errorMessage === 'string' ? errorMessage.trim() : '';
+  return {
+    status: 'missing',
+    state: 'missing',
+    contextDir,
+    cacheDir: null,
+    builtAt: null,
+    mismatches: [],
+    driftedSources: [],
+    skippedSources: [],
+    manifest: null,
+    instructions: trimmedError || `Context directory "${contextDir}" is not available.`
   };
 }
 
@@ -84,6 +143,60 @@ function buildLaunchRunResult({ success, launched, run, normalized, taskFile, er
     } : null,
     error: error || null
   };
+}
+
+function describeThrownValue(errorLike) {
+  if (typeof errorLike === 'string' && errorLike.trim() !== '') {
+    return errorLike;
+  }
+  if (errorLike && typeof errorLike.message === 'string' && errorLike.message.trim() !== '') {
+    return errorLike.message;
+  }
+  if (errorLike == null) {
+    return 'Unknown error.';
+  }
+  try {
+    const coerced = String(errorLike);
+    if (coerced && coerced !== '[object Object]') {
+      return coerced;
+    }
+  } catch (coercionError) {
+    // Ignore coercion problems and fall through to the generic fallback.
+  }
+  return 'Unknown error.';
+}
+
+function extractRunFromThrownValue(errorLike) {
+  if (!errorLike || typeof errorLike !== 'object') {
+    return null;
+  }
+  return errorLike.run && typeof errorLike.run === 'object'
+    ? errorLike.run
+    : null;
+}
+
+function errorPayloadFromThrownValue(errorLike) {
+  const message = describeThrownValue(errorLike);
+  if (errorLike && typeof errorLike === 'object' && typeof errorLike.stack === 'string' && errorLike.stack.trim() !== '') {
+    return {
+      message,
+      stack: errorLike.stack
+    };
+  }
+  return { message };
+}
+
+function finalizeRunSessionFailure(session, { orchestrator, errorLike }) {
+  const failedRun = (orchestrator && orchestrator.lastRun) || extractRunFromThrownValue(errorLike) || null;
+  const finishedAt = failedRun && failedRun.finishedAt ? failedRun.finishedAt : new Date().toISOString();
+  session.status = failedRun && failedRun.status ? failedRun.status : 'failed';
+  session.finishedAt = finishedAt;
+  session.durationMs = failedRun && failedRun.durationMs != null
+    ? failedRun.durationMs
+    : Date.parse(finishedAt) - Date.parse(session.startedAt);
+  session.error = failedRun && failedRun.error
+    ? failedRun.error
+    : errorPayloadFromThrownValue(errorLike);
 }
 
 function createRunIdentity() {
@@ -239,7 +352,9 @@ class ControlPlaneService {
           rawText: content,
           normalized,
           valid: true,
-          error: null
+          error: null,
+          errorCode: null,
+          errorDetails: null
         };
       } catch (error) {
         return {
@@ -249,7 +364,11 @@ class ControlPlaneService {
           rawText: content,
           normalized: null,
           valid: false,
-          error: error.message
+          error: error.message,
+          errorCode: error && typeof error.code === 'string' ? error.code : null,
+          errorDetails: error && typeof error.contextDir === 'string'
+            ? { contextDir: error.contextDir }
+            : null
         };
       }
     } catch (error) {
@@ -283,13 +402,22 @@ class ControlPlaneService {
       return {
         valid: true,
         normalized,
-        error: null
+        error: null,
+        errorCode: null,
+        errorDetails: null
       };
     } catch (error) {
       return {
         valid: false,
         normalized: null,
-        error: error.message
+        error: error.message,
+        // Preserve structured error metadata so callers can match on stable
+        // codes (CONTEXT_DIR_MISSING, CONTEXT_DIR_NOT_DIRECTORY) rather than
+        // on English error-message prefixes.
+        errorCode: error && typeof error.code === 'string' ? error.code : null,
+        errorDetails: error && typeof error.contextDir === 'string'
+          ? { contextDir: error.contextDir }
+          : null
       };
     }
   }
@@ -304,16 +432,22 @@ class ControlPlaneService {
           success: false,
           fromDraft: true,
           taskFile,
+          raw: rawConfig,
           normalized: null,
-          error: validation.error
+          error: validation.error,
+          errorCode: validation.errorCode,
+          errorDetails: validation.errorDetails
         };
       }
       return {
         success: true,
         fromDraft: true,
         taskFile,
+        raw: rawConfig,
         normalized: validation.normalized,
-        error: null
+        error: null,
+        errorCode: null,
+        errorDetails: null
       };
     }
 
@@ -323,8 +457,11 @@ class ControlPlaneService {
         success: false,
         fromDraft: false,
         taskFile,
+        raw: configResult.raw,
         normalized: null,
-        error: configResult.error
+        error: configResult.error,
+        errorCode: configResult.errorCode || null,
+        errorDetails: configResult.errorDetails || null
       };
     }
 
@@ -332,6 +469,7 @@ class ControlPlaneService {
       success: true,
       fromDraft: false,
       taskFile,
+      raw: configResult.raw,
       normalized: configResult.normalized,
       error: null
     };
@@ -553,48 +691,35 @@ class ControlPlaneService {
     return this.listRuns();
   }
 
-  async prepareRunLaunch({ rawConfig = null } = {}) {
-    const taskFile = taskPaths.legacyTaskFile(this.projectRoot);
-
-    if (rawConfig) {
-      const saveResult = await this.saveConfig(rawConfig);
-      if (!saveResult.success) {
-        return {
-          success: false,
-          taskFile,
-          normalized: null,
-          error: saveResult.error
-        };
-      }
-      return {
-        success: true,
-        taskFile,
-        normalized: saveResult.normalized,
-        error: null
-      };
-    }
-
-    const configResult = await this.loadConfig();
-    if (!configResult.exists || !configResult.valid) {
-      return {
-        success: false,
-        taskFile,
-        normalized: null,
-        error: configResult.error
-      };
-    }
-
+  // Internal helper: computes prepared-context status from an already-
+  // normalized config, skipping the resolve/validate step. Used on launch
+  // paths that already have a normalized draft so we don't re-run
+  // normalizeTaskConfig twice per launch.
+  async _contextStatusForNormalized(normalizedConfig) {
+    const contextConfig = normalizedConfig && normalizedConfig.context ? normalizedConfig.context : null;
+    const status = await getPreparedContextStatus(contextConfig, this.projectRoot);
     return {
-      success: true,
-      taskFile,
-      normalized: configResult.normalized,
-      error: null
+      ok: true,
+      ...status
     };
   }
 
   async getContextStatus({ rawConfig = null } = {}) {
     const configResult = await this.resolveConfigInput({ rawConfig });
     if (!configResult.success) {
+      const invalidContextStatus = buildInvalidContextStatusFromConfigError({
+        errorMessage: configResult.error,
+        errorCode: configResult.errorCode,
+        errorDetails: configResult.errorDetails,
+        rawConfig: configResult.raw,
+        projectRoot: this.projectRoot
+      });
+      if (invalidContextStatus) {
+        return {
+          ok: true,
+          ...invalidContextStatus
+        };
+      }
       if (!configResult.fromDraft && configResult.error === 'Task file not found') {
         return {
           ok: true,
@@ -637,6 +762,24 @@ class ControlPlaneService {
   async prepareContext({ rawConfig = null } = {}) {
     const configResult = await this.resolveConfigInput({ rawConfig });
     if (!configResult.success) {
+      const invalidContextStatus = buildInvalidContextStatusFromConfigError({
+        errorMessage: configResult.error,
+        errorCode: configResult.errorCode,
+        errorDetails: configResult.errorDetails,
+        rawConfig: configResult.raw,
+        projectRoot: this.projectRoot
+      });
+      if (invalidContextStatus) {
+        return {
+          ok: false,
+          code: 'CONTEXT_MISSING_DIR',
+          contextDir: invalidContextStatus.contextDir,
+          cacheDir: invalidContextStatus.cacheDir,
+          instructions: invalidContextStatus.instructions,
+          statusInfo: invalidContextStatus,
+          error: invalidContextStatus.instructions
+        };
+      }
       return {
         ok: false,
         error: (!configResult.fromDraft && configResult.error === 'Task file not found')
@@ -655,20 +798,41 @@ class ControlPlaneService {
 
     try {
       const result = await prepareContextIndex(contextConfig, this.projectRoot);
+      const allSources = result.manifest.sources || [];
+      const indexedSources = allSources.filter((s) => !s.skipped);
+      const skippedSources = allSources
+        .filter((s) => s.skipped)
+        .map((s) => ({
+          sourceRelativePath: s.sourceRelativePath,
+          skipReason: s.skipReason || 'Skipped during cache build'
+        }));
+
       return {
         ok: true,
         contextDir: result.rootDir,
         cacheDir: result.cacheDir,
         builtAt: result.builtAt,
-        sourceCount: result.manifest.sources.length,
+        sourceCount: allSources.length,
+        indexedCount: indexedSources.length,
+        skippedCount: skippedSources.length,
+        skippedSources,
         stats: result.manifest.stats,
         error: null
       };
     } catch (error) {
-      return {
+      const result = {
         ok: false,
         error: error.message
       };
+      if (error.code) result.code = error.code;
+      if (error.contextDir) result.contextDir = error.contextDir;
+      if (error.cacheDir) result.cacheDir = error.cacheDir;
+      if (error.instructions) result.instructions = error.instructions;
+      if (Array.isArray(error.mismatches) && error.mismatches.length > 0) {
+        result.mismatches = error.mismatches;
+      }
+      if (error.statusInfo) result.statusInfo = error.statusInfo;
+      return result;
     }
   }
 
@@ -697,30 +861,63 @@ class ControlPlaneService {
     };
   }
 
+  // Launch a background run session. Draft validation and persistence are
+  // intentionally split so that blocked launches (invalid config, missing
+  // context, drifted cache) never overwrite the saved task file. Only after
+  // all preflight checks pass does the draft get persisted to disk.
   async launchRunSession({ rawConfig = null, orchestratorOptions = {} } = {}) {
-    const prepared = await this.prepareRunLaunch({ rawConfig });
-    if (!prepared.success) {
+    // Phase 1: validate/normalize draft without persisting
+    const resolved = await this.resolveConfigInput({ rawConfig });
+    const taskFile = resolved.taskFile;
+    let normalized = resolved.normalized;
+
+    if (!resolved.success) {
+      const invalidContextStatus = buildInvalidContextStatusFromConfigError({
+        errorMessage: resolved.error,
+        errorCode: resolved.errorCode,
+        errorDetails: resolved.errorDetails,
+        rawConfig: resolved.raw,
+        projectRoot: this.projectRoot
+      });
+      if (invalidContextStatus) {
+        const contextBlock = buildBlockingContextLaunchError(invalidContextStatus);
+        return {
+          success: false,
+          launched: false,
+          runId: null,
+          status: null,
+          taskFile,
+          normalized: null,
+          session: null,
+          error: contextBlock,
+          contextStatus: invalidContextStatus
+        };
+      }
       return {
         success: false,
         launched: false,
         runId: null,
         status: null,
-        taskFile: prepared.taskFile,
+        taskFile,
         normalized: null,
         session: null,
-        error: prepared.error
+        error: resolved.error
       };
     }
 
-    const contextStatus = await this.getContextStatus({ rawConfig });
+    // Phase 2: context preflight (before any persistence). Use the already-
+    // normalized draft directly so we don't pay a second normalizeTaskConfig
+    // pass on every launch. getContextStatus (the public API) still re-
+    // resolves from rawConfig for external callers.
+    const contextStatus = await this._contextStatusForNormalized(normalized);
     if (!contextStatus.ok) {
       return {
         success: false,
         launched: false,
         runId: null,
         status: null,
-        taskFile: prepared.taskFile,
-        normalized: prepared.normalized,
+        taskFile,
+        normalized,
         session: null,
         error: contextStatus.error
       };
@@ -733,24 +930,41 @@ class ControlPlaneService {
         launched: false,
         runId: null,
         status: null,
-        taskFile: prepared.taskFile,
-        normalized: prepared.normalized,
+        taskFile,
+        normalized,
         session: null,
         error: contextBlock,
         contextStatus
       };
     }
 
+    // Phase 3: persist draft only after preflight is fully green
+    if (rawConfig) {
+      const saveResult = await this.saveConfig(rawConfig);
+      if (!saveResult.success) {
+        return {
+          success: false,
+          launched: false,
+          runId: null,
+          status: null,
+          taskFile,
+          normalized,
+          session: null,
+          error: saveResult.error
+        };
+      }
+    }
+
     const identity = createRunIdentity();
     const session = {
       runId: identity.runId,
       status: 'starting',
-      mode: prepared.normalized ? prepared.normalized.mode : null,
-      prompt: prepared.normalized ? prepared.normalized.prompt : '',
+      mode: normalized ? normalized.mode : null,
+      prompt: normalized ? normalized.prompt : '',
       startedAt: identity.startedAt,
       finishedAt: null,
       durationMs: null,
-      taskFile: prepared.taskFile,
+      taskFile,
       error: null,
       active: true,
       launchedAt: identity.startedAt,
@@ -766,30 +980,31 @@ class ControlPlaneService {
       });
       await orchestrator.init();
     } catch (error) {
+      const initErrorMessage = describeThrownValue(error);
       return {
         success: false,
         launched: false,
         runId: identity.runId,
         status: 'failed',
-        taskFile: prepared.taskFile,
-        normalized: prepared.normalized,
+        taskFile,
+        normalized,
         session: {
           ...buildRunSessionSummary({
             ...session,
             status: 'failed',
-            error: error.message,
+            error: initErrorMessage,
             active: false,
             finishedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           })
         },
-        error: error.message
+        error: initErrorMessage
       };
     }
 
     this.runSessions.set(identity.runId, session);
 
-    Promise.resolve().then(async () => {
+    const backgroundRun = Promise.resolve().then(async () => {
       try {
         session.status = 'running';
         session.updatedAt = new Date().toISOString();
@@ -801,17 +1016,17 @@ class ControlPlaneService {
           : Date.parse(session.finishedAt) - Date.parse(session.startedAt);
         session.error = run && run.error ? run.error : null;
       } catch (error) {
-        const failedRun = (orchestrator && orchestrator.lastRun) || error.run || null;
-        session.status = failedRun && failedRun.status ? failedRun.status : 'failed';
-        session.finishedAt = failedRun && failedRun.finishedAt ? failedRun.finishedAt : new Date().toISOString();
-        session.durationMs = failedRun && failedRun.durationMs != null
-          ? failedRun.durationMs
-          : Date.parse(session.finishedAt) - Date.parse(session.startedAt);
-        session.error = failedRun && failedRun.error ? failedRun.error : { message: error.message };
+        finalizeRunSessionFailure(session, { orchestrator, errorLike: error });
       } finally {
         session.active = false;
         session.updatedAt = new Date().toISOString();
       }
+    });
+    backgroundRun.catch((unexpectedError) => {
+      finalizeRunSessionFailure(session, { orchestrator, errorLike: unexpectedError });
+      session.active = false;
+      session.updatedAt = new Date().toISOString();
+      console.error(`Warning: background run session wrapper failed: ${describeThrownValue(unexpectedError)}`);
     });
 
     return {
@@ -819,31 +1034,51 @@ class ControlPlaneService {
       launched: true,
       runId: identity.runId,
       status: session.status,
-      taskFile: prepared.taskFile,
-      normalized: prepared.normalized,
+      taskFile,
+      normalized,
       session: buildRunSessionSummary(session),
       error: null
     };
   }
 
   async launchRun({ rawConfig = null, orchestratorOptions = {} } = {}) {
-    const prepared = await this.prepareRunLaunch({ rawConfig });
-    const taskFile = prepared.taskFile;
-    let normalized = prepared.normalized;
+    // Phase 1: validate/normalize draft without persisting
+    const resolved = await this.resolveConfigInput({ rawConfig });
+    const taskFile = resolved.taskFile;
+    let normalized = resolved.normalized;
     let orchestrator = null;
 
-    if (!prepared.success) {
+    if (!resolved.success) {
+      const invalidContextStatus = buildInvalidContextStatusFromConfigError({
+        errorMessage: resolved.error,
+        errorCode: resolved.errorCode,
+        errorDetails: resolved.errorDetails,
+        rawConfig: resolved.raw,
+        projectRoot: this.projectRoot
+      });
+      if (invalidContextStatus) {
+        return buildLaunchRunResult({
+          success: false,
+          launched: false,
+          run: null,
+          normalized: null,
+          taskFile,
+          error: buildBlockingContextLaunchError(invalidContextStatus)
+        });
+      }
       return buildLaunchRunResult({
         success: false,
         launched: false,
         run: null,
         normalized: null,
         taskFile,
-        error: prepared.error
+        error: resolved.error
       });
     }
 
-    const contextStatus = await this.getContextStatus({ rawConfig });
+    // Phase 2: context preflight (before any persistence). Reuses the
+    // already-normalized draft to avoid a redundant normalizeTaskConfig pass.
+    const contextStatus = await this._contextStatusForNormalized(normalized);
     if (!contextStatus.ok) {
       return buildLaunchRunResult({
         success: false,
@@ -867,6 +1102,21 @@ class ControlPlaneService {
       });
     }
 
+    // Phase 3: persist draft only after preflight is fully green
+    if (rawConfig) {
+      const saveResult = await this.saveConfig(rawConfig);
+      if (!saveResult.success) {
+        return buildLaunchRunResult({
+          success: false,
+          launched: false,
+          run: null,
+          normalized,
+          taskFile,
+          error: saveResult.error
+        });
+      }
+    }
+
     try {
       orchestrator = this.createOrchestrator(orchestratorOptions);
       await orchestrator.init();
@@ -880,13 +1130,15 @@ class ControlPlaneService {
         error: null
       });
     } catch (error) {
+      const failedRun = (orchestrator && orchestrator.lastRun) || extractRunFromThrownValue(error) || null;
+      const launchErrorMessage = describeThrownValue(error);
       return buildLaunchRunResult({
         success: false,
-        launched: Boolean((orchestrator && orchestrator.lastRun) || error.run),
-        run: (orchestrator && orchestrator.lastRun) || error.run || null,
+        launched: Boolean(failedRun),
+        run: failedRun,
         normalized,
         taskFile,
-        error: error.message
+        error: launchErrorMessage
       });
     }
   }

@@ -239,6 +239,29 @@ async function testRunAdapterInstallExecutesAndRefreshesStatus() {
   assert.strictEqual(result.statusAfter.status, 'installed_but_needs_login');
 }
 
+async function testInstallCommandUsesShellForWindowsCmdShims() {
+  const { __test } = require('../src/setup-service');
+
+  const invocation = __test.buildInstallInvocation({
+    type: 'npm-global',
+    packageName: '@google/gemini-cli',
+    command: 'npm install -g @google/gemini-cli'
+  });
+
+  if (process.platform === 'win32') {
+    assert.strictEqual(invocation.command, 'npm.cmd');
+    assert.strictEqual(__test.shouldUseShellForCommand(invocation.command), true,
+      'Windows .cmd install helpers should use cmd.exe wrapper handling');
+    assert.strictEqual(
+      __test.buildWindowsCommandLine(invocation.command, invocation.args),
+      'npm.cmd install -g @google/gemini-cli'
+    );
+  } else {
+    assert.strictEqual(invocation.command, 'npm');
+    assert.strictEqual(__test.shouldUseShellForCommand(invocation.command), false);
+  }
+}
+
 async function testRunAdapterLoginRequiresApproval() {
   const { runAdapterLogin } = require('../src/setup-service');
 
@@ -393,6 +416,9 @@ async function main() {
 
   await testRunAdapterInstallExecutesAndRefreshesStatus();
   console.log('  [PASS] runAdapterInstall executes the helper and refreshes status');
+
+  await testInstallCommandUsesShellForWindowsCmdShims();
+  console.log('  [PASS] install helper uses shell-safe handling for Windows command shims');
 
   await testRunAdapterLoginRequiresApproval();
   console.log('  [PASS] runAdapterLogin requires explicit approval');

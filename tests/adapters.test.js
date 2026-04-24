@@ -1,5 +1,8 @@
 const assert = require('assert');
+const fs = require('fs');
 const http = require('http');
+const os = require('os');
+const path = require('path');
 const { __test: adapterTest, clearAuthCache, resolveModelArgs, resolveEffortArgs } = require('../src/adapters');
 const { resolveWriteModeArgs } = require('../src/adapters');
 
@@ -676,6 +679,45 @@ function testNodeOrDirectDispatch() {
   assert.deepEqual(directWithFlags.args, ['-p', 'test'], 'node flags dropped for direct commands');
 }
 
+function testResolveFromPathEnvPrefersWindowsCmdShim() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loopi-path-'));
+  try {
+    const extensionless = path.join(tempDir, 'gemini');
+    const cmdShim = path.join(tempDir, 'gemini.cmd');
+    fs.writeFileSync(extensionless, 'node shell shim');
+    fs.writeFileSync(cmdShim, '@echo off\r\n');
+
+    const resolved = adapterTest.resolveFromPathEnv('gemini', {
+      envPath: tempDir,
+      pathExt: '.COM;.EXE;.BAT;.CMD',
+      platform: 'win32'
+    });
+
+    assert.strictEqual(resolved, cmdShim,
+      'Windows PATH lookup should prefer .cmd over extensionless npm shims');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function testResolveFromPathEnvFindsUnixShim() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loopi-path-'));
+  try {
+    const shim = path.join(tempDir, 'opencode');
+    fs.writeFileSync(shim, '#!/usr/bin/env node\n');
+
+    const resolved = adapterTest.resolveFromPathEnv('opencode', {
+      envPath: tempDir,
+      platform: 'linux'
+    });
+
+    assert.strictEqual(resolved, shim,
+      'Unix PATH lookup should find extensionless command shims');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 function testCodexBuildersWithShimPath() {
   // When resolveFromPath returns a shim, builders should invoke it directly
   const invocation = adapterTest.buildCodexPrimaryInvocation('/usr/local/bin/codex', {
@@ -879,7 +921,7 @@ async function canRunProcessTests() {
 
 async function testCmdWrapperExecutesWithShell() {
   if (process.platform !== 'win32') {
-    // This test only applies on Windows where .cmd files need shell: true.
+    // This test only applies on Windows where .cmd files need cmd.exe handling.
     return;
   }
 
@@ -2864,6 +2906,8 @@ async function main() {
   testOpencodeNonImplementCanWriteStillPlan();
   testOpencodeInvocationWiresEarlyExitClassifier();
   testNodeOrDirectDispatch();
+  testResolveFromPathEnvPrefersWindowsCmdShim();
+  testResolveFromPathEnvFindsUnixShim();
   testCodexBuildersWithShimPath();
   testQwenBuildersWithShimPath();
   testCombineOutputStripsBenignPowershellNoise();

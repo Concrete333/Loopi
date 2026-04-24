@@ -239,13 +239,31 @@ In the app, the intended flow is the same:
 The app will tell you whether context is:
 
 - not configured
-- missing
+- context path invalid (the configured path does not resolve to a usable directory)
+- not prepared (the directory exists but no cache has been built)
 - config-mismatched
 - drifted
 - ready
 - ready with warnings
 
-If you try to run while context is missing or drifted, the app blocks launch before creating a live run session and points you back to the Prepare context action.
+When the context path is invalid, the app shows the backend error message and demotes the Prepare button, since the real fix is correcting the context path first. When the cache is simply not built yet, Prepare Context stays primary.
+
+If you try to run while context is missing or drifted, the app blocks launch before creating a live run session. The blocker appears inline on whichever tab you started from, with the specific context status and a link to Settings where you can fix the problem.
+
+#### Run Now does not overwrite saved state on blocked launches
+
+When you click **Run Now** with unsaved draft changes, the control plane validates and normalizes the current draft **without** persisting it to `shared/task.json`. If context preflight fails, the launch is blocked and the saved task file remains untouched. Only after preflight passes does the control plane persist the draft and start the run session.
+
+This means a blocked launch is nondestructive: your prior saved config stays intact.
+
+#### Prepare reports skipped files honestly
+
+When preparation succeeds, the app reports what actually happened:
+
+- If all sources were indexed: "Context prepared: X sources indexed."
+- If some sources were skipped: "Context prepared: X indexed, Y skipped."
+
+The success message never claims more files were indexed than actually were. Skipped files are shown in the status panel with their skip reasons.
 
 ## When You Need To Prepare Again
 

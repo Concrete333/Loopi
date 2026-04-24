@@ -507,14 +507,38 @@ function createUnsupportedHelperResult(agentId, actionType, metadata) {
   };
 }
 
+function shouldUseShellForCommand(command) {
+  return process.platform === 'win32' && /\.(cmd|bat)$/i.test(String(command || ''));
+}
+
+function quoteForWindowsCmdArg(value) {
+  const text = String(value || '');
+  if (!text) {
+    return '""';
+  }
+  if (!/[\s"&<>|^]/.test(text)) {
+    return text;
+  }
+  return `"${text.replace(/"/g, '\\"')}"`;
+}
+
+function buildWindowsCommandLine(command, args = []) {
+  return [command, ...args].map(quoteForWindowsCmdArg).join(' ');
+}
+
 function defaultCommandRunner({ command, args = [], cwd, env, timeoutMs = 0 }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env,
-      shell: false,
-      windowsHide: true
-    });
+    const useWindowsCommandWrapper = shouldUseShellForCommand(command);
+    const child = spawn(
+      useWindowsCommandWrapper ? (process.env.ComSpec || 'cmd.exe') : command,
+      useWindowsCommandWrapper ? ['/d', '/s', '/c', buildWindowsCommandLine(command, args)] : args,
+      {
+        cwd,
+        env,
+        shell: false,
+        windowsHide: true
+      }
+    );
 
     let stdout = '';
     let stderr = '';
@@ -800,6 +824,9 @@ module.exports = {
     cloneMetadata,
     buildInstallInvocation,
     buildWindowsInteractiveLaunchScript,
+    shouldUseShellForCommand,
+    quoteForWindowsCmdArg,
+    buildWindowsCommandLine,
     defaultCommandRunner,
     defaultInteractiveLauncher,
     quoteForWindowsSingleQuotedString,

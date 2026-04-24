@@ -939,6 +939,25 @@ test('Missing context directory fails at config load time', () => {
   }, /context.dir does not exist/i);
 });
 
+test('Missing context directory attaches a structured error code and contextDir', () => {
+  let caught = null;
+  try {
+    normalizeTaskConfig(baseTask({
+      context: {
+        dir: './context/does-not-exist'
+      }
+    }), { projectRoot: PROJECT_ROOT });
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.ok(caught, 'expected normalizeTaskConfig to throw');
+  assert.strictEqual(caught.code, 'CONTEXT_DIR_MISSING',
+    'missing-context-dir errors must expose a stable error code so downstream matching is not string-coupled');
+  assert.ok(typeof caught.contextDir === 'string' && caught.contextDir.length > 0,
+    'missing-context-dir errors must carry the resolved contextDir for structured surfacing');
+});
+
 test('Context maxCharsPerPhase with non-integer value throws an error', () => {
   assert.throws(() => {
     normalizeTaskConfig(baseTask({

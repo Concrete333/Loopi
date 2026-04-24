@@ -17,6 +17,14 @@ Start it from the project root:
 npm run ui
 ```
 
+On Windows, the shipped repo also includes a clickable launcher at the repo root:
+
+```text
+Launch Loopi UI.cmd
+```
+
+That launcher starts the local UI server in a separate console window, waits for the control plane to answer on `http://127.0.0.1:4311/api/bootstrap`, and then opens the browser automatically.
+
 By default, the server binds to `127.0.0.1:4311`.
 
 ## Saved Task Safety
@@ -32,6 +40,26 @@ If `shared/task.json` is malformed JSON or fails backend validation:
 
 This is intentional. Loopi will not present an invalid saved task file as if it were a clean draft.
 
+## Run Now Safety
+
+`Run Now` is intentionally separate from `Save`. When you click **Run Now** with unsaved draft changes:
+
+1. The control plane validates and normalizes the current draft **without** persisting it to `shared/task.json`.
+2. If the task uses `context`, the control plane runs context preflight against the normalized draft.
+3. If preflight fails (missing directory, missing cache, config mismatch, or drifted sources), the launch is blocked and the saved task file is **not** overwritten. Your saved config remains untouched.
+4. Only after preflight passes does the control plane persist the draft and start the run session.
+
+This means a blocked launch is nondestructive: you can fix the problem and try again without losing your prior saved state.
+
+## Prepare Context And Warnings
+
+When you click **Prepare Context**, the action reports what actually happened:
+
+- If all sources were indexed: "Context prepared: X sources indexed."
+- If some sources were skipped: "Context prepared: X indexed, Y skipped."
+
+Skipped files are shown in the status panel with their skip reasons. The success message never claims more files were indexed than actually were.
+
 ## Optional Arguments
 
 You can pass startup flags directly to the server:
@@ -43,7 +71,7 @@ node src/control-plane/server.js --host 127.0.0.1 --port 3030 --project-root C:\
 Available flags:
 
 - `--host`: host to bind to. Default is `127.0.0.1`.
-- `--port`: port to bind to. Default is `3030`.
+- `--port`: port to bind to. Default is `4311`.
 - `--project-root`: project root to use for `shared/`, `config/`, and run data.
 
 ## Screens
@@ -92,7 +120,8 @@ When a context folder is configured, the Settings screen shows a status indicato
 - **Ready with warnings** (yellow): usable but some sources were skipped during preparation
 - **Drifted** (red): the prepared cache no longer matches the current context inputs (config or source-tree changes)
 - **Config mismatch** (red): the configured context rules changed and the cache must be prepared again
-- **Not prepared** (red): context is configured but no cache exists yet
+- **Not prepared** (red): the context directory exists but no prepared cache has been built yet
+- **Context path invalid** (red): the configured context path does not resolve to a usable directory
 
 The status area also shows:
 
@@ -100,12 +129,14 @@ The status area also shows:
 - drift details when the cache is stale
 - skipped file counts with reasons when warnings are present
 
+When the context path is invalid, the panel shows the backend error message (for example the path does not exist or points to a file) and **Prepare Context** is demoted to secondary, since the real fix is correcting the path first. When the directory exists but the cache has not been built, **Prepare Context** stays primary.
+
 Two actions are available:
 
-- **Prepare Context** (primary when drifted/missing, secondary when ready) triggers a cache build
+- **Prepare Context** (primary when the directory exists but cache is missing or stale; secondary when ready or the context path is invalid) triggers a cache build
 - **Refresh Status** re-checks the current cache state without rebuilding
 
-If you click **Run Now** while context is missing or stale, the UI blocks launch before starting a live run session, returns you to Settings, and shows the current context status with the next action.
+If you click **Run Now** while context is missing or stale, the UI blocks launch before starting a live run session. The blocker appears inline on whichever tab you launched from, with the specific context status and a link to the Settings panel where you can fix the problem. The UI does **not** force-switch tabs.
 
 ### Task Composer
 

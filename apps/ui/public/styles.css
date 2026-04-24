@@ -273,6 +273,7 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  min-width: 0;
 }
 
 .chip {
@@ -283,6 +284,16 @@ button {
   border-radius: 999px;
   font-size: 0.92rem;
   background: rgba(80, 57, 41, 0.08);
+  max-width: 100%;
+}
+
+.chip--path {
+  display: block;
+  flex: 1 1 260px;
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chip--success {

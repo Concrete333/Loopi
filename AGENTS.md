@@ -22,15 +22,17 @@ The normal path is:
 1. Run `npm run cli -- doctor`
 2. Run `npm run cli -- plan` / `review` / `implement` / `oneshot`
 3. Follow the interactive prompts
-4. If the task uses `context`, run `npm run cli -- context prepare` once before the first run
+4. If the task uses `context`, run `npm run cli -- context prepare` before the first run and again after context files or context rules change
 5. Run the task and review results in `shared/scratchpad.txt`
+
+When `shared/task.json` exists and includes `context`, `doctor` also checks prepared-context readiness so users can catch invalid paths, missing caches, or drift before launching a run.
 
 The browser UI is also a first-class path:
 
 1. Run `npm run ui`
 2. Use Setup and Settings to configure agents/providers and edit the task
 3. Prepare context in Settings when `context` is configured
-4. Launch and monitor the run from the UI
+4. Launch and monitor the run from the UI; `Run Now` validates the current draft before persisting it, so blocked launches do not overwrite the saved task file
 
 `shared/task.json` exists as the current task file used by the CLI and runtime, but it is a secondary/manual path rather than the primary interface.
 
@@ -47,6 +49,8 @@ It adds:
 - traceable run artifacts
 - context selection and delivery controls
 - explicit prepared-context reuse through `.loopi-context/`
+- safe UI launch gating for draft validation and prepared-context blockers
+- live run-session monitoring through the local control plane
 
 ## Key files
 

@@ -8,7 +8,7 @@ If you prefer a browser-based control plane for setup, settings, task compositio
 npm run ui
 ```
 
-The UI runs locally on `http://127.0.0.1:3030` by default and uses the same validated backend services as the CLI.
+The UI runs locally on `http://127.0.0.1:4311` by default and uses the same validated backend services as the CLI.
 It also surfaces invalid saved task files explicitly instead of masking them with defaults, and its Runs tab shows live background sessions while a task is still running.
 
 ## Beginner CLI

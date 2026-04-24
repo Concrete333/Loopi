@@ -757,11 +757,17 @@ function normalizeContext(rawTask, projectRoot) {
 
   const resolvedContextDir = path.resolve(projectRoot || process.cwd(), dir);
   if (!fs.existsSync(resolvedContextDir)) {
-    throw new Error(`context.dir does not exist: "${resolvedContextDir}"`);
+    const missingError = new Error(`context.dir does not exist: "${resolvedContextDir}"`);
+    missingError.code = 'CONTEXT_DIR_MISSING';
+    missingError.contextDir = resolvedContextDir;
+    throw missingError;
   }
   const contextStats = fs.statSync(resolvedContextDir);
   if (!contextStats.isDirectory()) {
-    throw new Error(`context.dir must resolve to a directory: "${resolvedContextDir}"`);
+    const notDirError = new Error(`context.dir must resolve to a directory: "${resolvedContextDir}"`);
+    notDirError.code = 'CONTEXT_DIR_NOT_DIRECTORY';
+    notDirError.contextDir = resolvedContextDir;
+    throw notDirError;
   }
 
   // Validate include (optional)

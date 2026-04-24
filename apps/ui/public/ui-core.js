@@ -69,13 +69,22 @@
     `;
   }
 
-  function roleSelect(role, selectedValue, optionsMarkup) {
+  function roleSelect(role, selectedValue, targets) {
+    // targets is an array of execution-target ids. The selected option is
+    // marked explicitly per-option so special characters in ids cannot fool
+    // a string-patch pass.
+    const optionList = Array.isArray(targets) ? targets : [];
+    const normalized = selectedValue || '';
+    const options = optionList.map((target) => {
+      const isSelected = target === normalized;
+      return `<option value="${escapeHtml(target)}"${isSelected ? ' selected' : ''}>${escapeHtml(target)}</option>`;
+    }).join('');
     return `
       <div class="field">
         <label>${escapeHtml(role)}</label>
         <select data-role-field="${escapeHtml(role)}">
-          <option value="" ${selectedValue ? '' : 'selected'}>Auto</option>
-          ${optionsMarkup.replace(`value="${escapeHtml(selectedValue)}"`, `value="${escapeHtml(selectedValue)}" selected`)}
+          <option value=""${normalized ? '' : ' selected'}>Auto</option>
+          ${options}
         </select>
       </div>
     `;

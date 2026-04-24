@@ -1185,6 +1185,21 @@ function getAdapter(agentName) {
   return adapter;
 }
 
+function quoteForWindowsCmdArg(value) {
+  const text = String(value || '');
+  if (!text) {
+    return '""';
+  }
+  if (!/[\s"&<>|^]/.test(text)) {
+    return text;
+  }
+  return `"${text.replace(/"/g, '\\"')}"`;
+}
+
+function buildWindowsCommandLine(command, args = []) {
+  return [command, ...args].map(quoteForWindowsCmdArg).join(' ');
+}
+
 function runProcess({ command, args, cwd, timeoutMs, env, displayCommand, earlyExitClassifier, signal }) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
@@ -1211,14 +1226,18 @@ function runProcess({ command, args, cwd, timeoutMs, env, displayCommand, earlyE
     // Windows .cmd/.bat wrappers are not directly executable — they require
     // a shell (cmd.exe) to interpret them. This arises when resolveFromPath()
     // finds a .cmd shim on PATH for Codex, Gemini, Qwen, or Kilo.
-    const useShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
+    const useWindowsCommandWrapper = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
+    const spawnCommand = useWindowsCommandWrapper ? (process.env.ComSpec || 'cmd.exe') : command;
+    const spawnArgs = useWindowsCommandWrapper
+      ? ['/d', '/s', '/c', buildWindowsCommandLine(command, args)]
+      : args;
 
-    const child = spawn(command, args, {
+    const child = spawn(spawnCommand, spawnArgs, {
       cwd,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      shell: useShell
+      shell: false
     });
 
     activeProcesses.add(child);
@@ -2372,23 +2391,87 @@ function resolveFile(label, candidates) {
   throw new Error(`Could not resolve ${label}. Set the matching LOOPI_* path override.${detail}`);
 }
 
+function getPathEnvValue(env = process.env) {
+  return env.PATH || env.Path || env.path || '';
+}
+
+function pathExtCandidates(pathExt = process.env.PATHEXT) {
+  const raw = pathExt || '.COM;.EXE;.BAT;.CMD';
+  return raw
+    .split(';')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function resolveFromPathEnv(commandName, {
+  envPath = getPathEnvValue(),
+  pathExt = process.env.PATHEXT,
+  platform = process.platform
+} = {}) {
+  const command = String(commandName || '').trim();
+  if (!command) {
+    return null;
+  }
+
+  const dirs = String(envPath || '')
+    .split(path.delimiter)
+    .map((entry) => entry.trim().replace(/^"|"$/g, ''))
+    .filter(Boolean);
+
+  const hasExtension = path.extname(command) !== '';
+  let names = [command];
+  if (platform === 'win32' && !hasExtension) {
+    // Prefer executable wrappers before extensionless npm shell shims. The
+    // extensionless files are useful for Git Bash, but Node cannot reliably
+    // spawn them from a normal Windows process.
+    names = [
+      ...pathExtCandidates(pathExt).map((ext) => `${command}${ext.toLowerCase()}`),
+      command
+    ];
+  }
+
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
 function resolveFromPath(commandName) {
+  const resolvedFromEnv = resolveFromPathEnv(commandName);
+  if (resolvedFromEnv) {
+    return resolvedFromEnv;
+  }
+
   const lookupCommand = process.platform === 'win32' ? 'where.exe' : 'which';
   const result = spawnSync(lookupCommand, [commandName], {
     encoding: 'utf8',
     windowsHide: true
   });
 
-  if (result.status !== 0) {
+  if (result.status !== 0 || result.error) {
     return null;
   }
 
-  const firstLine = result.stdout
+  const resolvedLines = result.stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .find(Boolean);
+    .filter(Boolean);
 
-  return firstLine || null;
+  if (process.platform === 'win32') {
+    const executableExts = new Set(pathExtCandidates());
+    const executableLine = resolvedLines.find((line) => executableExts.has(path.extname(line).toLowerCase()));
+    if (executableLine) {
+      return executableLine;
+    }
+  }
+
+  return resolvedLines[0] || null;
 }
 
 // Determines whether the resolved path is a Node.js script that should be
@@ -2427,13 +2510,20 @@ function npmGlobalNodeModulePaths(...parts) {
 // Returns candidate paths for npm-global bin on the current platform.
 function npmGlobalBinPaths(...parts) {
   if (process.platform === 'win32') {
-    return [path.join(os.homedir(), 'AppData', 'Roaming', 'npm', ...parts)];
+    const roots = [
+      process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : null,
+      path.join(os.homedir(), 'AppData', 'Roaming', 'npm'),
+      process.env.VOLTA_HOME ? path.join(process.env.VOLTA_HOME, 'bin') : null
+    ].filter(Boolean);
+    return Array.from(new Set(roots)).map((root) => path.join(root, ...parts));
   }
   return [
+    process.env.NVM_BIN ? path.join(process.env.NVM_BIN, ...parts) : null,
+    process.env.VOLTA_HOME ? path.join(process.env.VOLTA_HOME, 'bin', ...parts) : null,
     path.join('/usr', 'local', 'bin', ...parts),
     path.join('/usr', 'bin', ...parts),
     path.join(os.homedir(), '.npm-global', 'bin', ...parts)
-  ];
+  ].filter(Boolean);
 }
 
 // ── Opencode ──────────────────────────────────────────────────────────────────
@@ -2521,12 +2611,25 @@ function shouldRetryOpencodeWithFallback(result) {
 const adapters = {
   claude: {
     resolve() {
-      return resolveFile('Claude executable', [
+      const candidates = [
         process.env.LOOPI_CLAUDE_PATH,
         path.join(os.homedir(), '.local', 'bin', 'claude.exe'),
-        resolveFromPath('claude.exe'),
-        resolveFromPath('claude')
-      ]);
+      ];
+      if (process.platform === 'win32') {
+        candidates.push(
+          ...npmGlobalBinPaths('claude.cmd'),
+          ...npmGlobalBinPaths('claude.exe'),
+          resolveFromPath('claude.cmd'),
+          resolveFromPath('claude.exe'),
+          resolveFromPath('claude')
+        );
+      } else {
+        candidates.push(
+          ...npmGlobalBinPaths('claude'),
+          resolveFromPath('claude')
+        );
+      }
+      return resolveFile('Claude executable', candidates);
     },
     buildPreflightInvocation(command, options) {
       return buildClaudePreflightInvocation(command, options);
@@ -2545,11 +2648,23 @@ const adapters = {
   },
   codex: {
     resolve() {
-      return resolveFile('Codex entrypoint', [
+      const candidates = [
         process.env.LOOPI_CODEX_JS,
         ...npmGlobalNodeModulePaths('@openai', 'codex', 'bin', 'codex.js'),
-        resolveFromPath('codex')
-      ]);
+      ];
+      if (process.platform === 'win32') {
+        candidates.push(
+          ...npmGlobalBinPaths('codex.cmd'),
+          resolveFromPath('codex.cmd'),
+          resolveFromPath('codex')
+        );
+      } else {
+        candidates.push(
+          ...npmGlobalBinPaths('codex'),
+          resolveFromPath('codex')
+        );
+      }
+      return resolveFile('Codex entrypoint', candidates);
     },
     buildPreflightInvocation(entrypoint, options) {
       return buildCodexPreflightInvocation(entrypoint, options);
@@ -2572,11 +2687,23 @@ const adapters = {
   },
   gemini: {
     resolve() {
-      return resolveFile('Gemini entrypoint', [
+      const candidates = [
         process.env.LOOPI_GEMINI_JS,
-        ...npmGlobalNodeModulePaths('@google', 'gemini-cli', 'dist', 'index.js'),
-        resolveFromPath('gemini')
-      ]);
+        ...npmGlobalNodeModulePaths('@google', 'gemini-cli', 'dist', 'index.js')
+      ];
+      if (process.platform === 'win32') {
+        candidates.push(
+          ...npmGlobalBinPaths('gemini.cmd'),
+          resolveFromPath('gemini.cmd'),
+          resolveFromPath('gemini')
+        );
+      } else {
+        candidates.push(
+          ...npmGlobalBinPaths('gemini'),
+          resolveFromPath('gemini')
+        );
+      }
+      return resolveFile('Gemini entrypoint', candidates);
     },
     buildPreflightInvocation(entrypoint, options) {
       const { command, args, displayPrefix } = nodeOrDirect(entrypoint, ['--help'], ['--no-warnings=DEP0040']);
@@ -2636,11 +2763,23 @@ const adapters = {
   },
   qwen: {
     resolve() {
-      return resolveFile('Qwen entrypoint', [
+      const candidates = [
         process.env.LOOPI_QWEN_JS,
-        ...npmGlobalNodeModulePaths('@qwen-code', 'qwen-code', 'cli.js'),
-        resolveFromPath('qwen')
-      ]);
+        ...npmGlobalNodeModulePaths('@qwen-code', 'qwen-code', 'cli.js')
+      ];
+      if (process.platform === 'win32') {
+        candidates.push(
+          ...npmGlobalBinPaths('qwen.cmd'),
+          resolveFromPath('qwen.cmd'),
+          resolveFromPath('qwen')
+        );
+      } else {
+        candidates.push(
+          ...npmGlobalBinPaths('qwen'),
+          resolveFromPath('qwen')
+        );
+      }
+      return resolveFile('Qwen entrypoint', candidates);
     },
     buildPreflightInvocation(entrypoint, options) {
       return buildQwenPreflightInvocation(entrypoint, options);
@@ -2660,11 +2799,19 @@ const adapters = {
   opencode: {
     resolve() {
       const candidates = [
-        process.env.LOOPI_OPENCODE_PATH,
-        resolveFromPath('opencode')
+        process.env.LOOPI_OPENCODE_PATH
       ];
       if (process.platform === 'win32') {
-        candidates.push(resolveFromPath('opencode.cmd'));
+        candidates.push(
+          ...npmGlobalBinPaths('opencode.cmd'),
+          resolveFromPath('opencode.cmd'),
+          resolveFromPath('opencode')
+        );
+      } else {
+        candidates.push(
+          ...npmGlobalBinPaths('opencode'),
+          resolveFromPath('opencode')
+        );
       }
       return resolveFile('Opencode executable', candidates);
     },
@@ -2738,6 +2885,11 @@ module.exports = {
     classifyOpencodeFatalOutput,
     shouldRetryOpencodeWithFallback,
     nodeOrDirect,
+    getPathEnvValue,
+    pathExtCandidates,
+    resolveFromPathEnv,
+    resolveFromPath,
+    npmGlobalBinPaths,
     splitRequestDefaults,
     buildRequestBody
   }

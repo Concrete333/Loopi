@@ -40,15 +40,15 @@ class PreparedContextError extends Error {
    * @param {Object} options
    * @param {string} options.code           Machine-readable code:
    *   'CONTEXT_MISSING_DIR' | 'CONTEXT_CACHE_MISSING' |
-   *   'CONTEXT_CACHE_DRIFTED' | 'CONTEXT_CONFIG_MISMATCH' |
-   *   'CONTEXT_NO_LONGER_EXISTS'
+   *   'CONTEXT_CACHE_DRIFT'
    * @param {string} [options.contextDir]   Absolute path to the context root
    * @param {string} [options.cacheDir]     Absolute path to the cache dir
    * @param {Array}  [options.mismatches]   Structured mismatch objects from
    *   comparePreparedConfig or source-tree drift entries
    * @param {string} [options.instructions] Actionable recovery text
+   * @param {Object} [options.statusInfo]   Original structured status payload
    */
-  constructor(message, { code, contextDir, cacheDir, mismatches, instructions } = {}) {
+  constructor(message, { code, contextDir, cacheDir, mismatches, instructions, statusInfo } = {}) {
     super(message);
     this.name = 'PreparedContextError';
     this.code = code || 'CONTEXT_UNKNOWN';
@@ -56,6 +56,7 @@ class PreparedContextError extends Error {
     if (cacheDir) this.cacheDir = cacheDir;
     if (Array.isArray(mismatches) && mismatches.length > 0) this.mismatches = mismatches;
     if (instructions) this.instructions = instructions;
+    if (statusInfo) this.statusInfo = statusInfo;
   }
 }
 
@@ -91,12 +92,99 @@ function getPreparedCacheInstruction(contextDir, reason) {
   return `${detail} Run "npm run cli -- context prepare" from the project root, then retry the run.`;
 }
 
+function buildPreparedContextErrorFromStatus(status) {
+  if (!status || !status.status || status.status === 'no-context') {
+    return null;
+  }
+
+  if (status.status === 'missing') {
+    const isMissingDir = !status.cacheDir;
+    const instructions = status.instructions || (
+      isMissingDir
+        ? `Context directory "${status.contextDir}" is not available.`
+        : getPreparedCacheInstruction(status.contextDir)
+    );
+    return new PreparedContextError(
+      instructions,
+      {
+        code: isMissingDir ? 'CONTEXT_MISSING_DIR' : 'CONTEXT_CACHE_MISSING',
+        contextDir: status.contextDir,
+        cacheDir: status.cacheDir,
+        instructions,
+        statusInfo: status
+      }
+    );
+  }
+
+  if (status.status === 'config-mismatch') {
+    const instructions = status.instructions || getPreparedCacheInstruction(
+      status.contextDir,
+      `config changed: ${formatMismatchSummary(status.mismatches)}`
+    );
+    return new PreparedContextError(
+      instructions,
+      {
+        code: 'CONTEXT_CACHE_DRIFT',
+        contextDir: status.contextDir,
+        cacheDir: status.cacheDir,
+        mismatches: status.mismatches,
+        instructions,
+        statusInfo: status
+      }
+    );
+  }
+
+  if (status.status === 'drifted') {
+    const instructions = status.instructions || (
+      `Prepared context cache is stale for "${status.contextDir}". ` +
+      `${status.driftedSources.length} source(s) changed since last prepare. ` +
+      'Run "npm run cli -- context prepare" to rebuild.'
+    );
+    return new PreparedContextError(
+      instructions,
+      {
+        code: 'CONTEXT_CACHE_DRIFT',
+        contextDir: status.contextDir,
+        cacheDir: status.cacheDir,
+        mismatches: status.driftedSources.map((d) => ({
+          kind: 'source',
+          field: d.sourceRelativePath,
+          description: d.description || `Source ${d.change}: ${d.sourceRelativePath}`,
+          reason: d.description || `Source ${d.change}: ${d.sourceRelativePath}`
+        })),
+        instructions,
+        statusInfo: status
+      }
+    );
+  }
+
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // prepareContextIndex — builds or refreshes the cache
 // ---------------------------------------------------------------------------
 
 async function prepareContextIndex(contextConfig, taskRootDir) {
-  const contextDir = await resolveContextDir(contextConfig, taskRootDir);
+  let contextDir;
+  try {
+    contextDir = await resolveContextDir(contextConfig, taskRootDir);
+  } catch (error) {
+    const resolvedContextDir = path.resolve(taskRootDir, contextConfig.dir);
+    const status = {
+      status: 'missing',
+      state: 'missing',
+      contextDir: resolvedContextDir,
+      cacheDir: null,
+      builtAt: null,
+      mismatches: [],
+      driftedSources: [],
+      skippedSources: [],
+      manifest: null,
+      instructions: error.message
+    };
+    throw buildPreparedContextErrorFromStatus(status) || error;
+  }
   const manifest = await ensureContextCache(contextConfig, taskRootDir);
   const files = await buildFilesFromCache(contextDir, manifest);
 
@@ -387,54 +475,9 @@ async function validatePreparedContextReadiness(contextConfig, taskRootDir) {
     return status;
   }
 
-  if (status.status === 'missing') {
-    throw new PreparedContextError(
-      status.instructions || getPreparedCacheInstruction(status.contextDir),
-      {
-        code: 'CONTEXT_CACHE_MISSING',
-        contextDir: status.contextDir,
-        cacheDir: status.cacheDir,
-        instructions: status.instructions || getPreparedCacheInstruction(status.contextDir)
-      }
-    );
-  }
-
-  if (status.status === 'config-mismatch') {
-    throw new PreparedContextError(
-      status.instructions || getPreparedCacheInstruction(
-        status.contextDir,
-        `config changed: ${formatMismatchSummary(status.mismatches)}`
-      ),
-      {
-        code: 'CONTEXT_CACHE_DRIFT',
-        contextDir: status.contextDir,
-        cacheDir: status.cacheDir,
-        mismatches: status.mismatches,
-        instructions: status.instructions || getPreparedCacheInstruction(status.contextDir)
-      }
-    );
-  }
-
-  if (status.status === 'drifted') {
-    throw new PreparedContextError(
-      status.instructions || (
-        `Prepared context cache is stale for "${status.contextDir}". ` +
-        `${status.driftedSources.length} source(s) changed since last prepare. ` +
-        'Run "npm run cli -- context prepare" to rebuild.'
-      ),
-      {
-        code: 'CONTEXT_CACHE_DRIFT',
-        contextDir: status.contextDir,
-        cacheDir: status.cacheDir,
-        mismatches: status.driftedSources.map(d => ({
-          kind: 'source',
-          field: d.sourceRelativePath,
-          description: d.description || `Source ${d.change}: ${d.sourceRelativePath}`,
-          reason: d.description || `Source ${d.change}: ${d.sourceRelativePath}`
-        })),
-        instructions: status.instructions || 'Run "npm run cli -- context prepare" to rebuild the cache.'
-      }
-    );
+  const blockingError = buildPreparedContextErrorFromStatus(status);
+  if (blockingError) {
+    throw blockingError;
   }
 
   return status;

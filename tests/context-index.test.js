@@ -466,6 +466,28 @@ console.log('context-index: buildContextIndex');
       }
     });
 
+    await test('prepareContextIndex throws PreparedContextError with structured details when the context directory is invalid', async () => {
+      const contextConfig = {
+        dir: './nonexistent',
+        include: ['**/*.md'],
+        exclude: []
+      };
+
+      try {
+        await prepareContextIndex(contextConfig, tmpDir);
+        assert.fail('Should have thrown PreparedContextError');
+      } catch (error) {
+        assert.ok(error instanceof PreparedContextError);
+        assert.strictEqual(error.code, 'CONTEXT_MISSING_DIR');
+        assert.ok(error.contextDir);
+        assert.ok(error.message.includes('does not exist'));
+        assert.ok(error.statusInfo);
+        assert.strictEqual(error.statusInfo.status, 'missing');
+        assert.strictEqual(error.statusInfo.cacheDir, null);
+        assert.strictEqual(error.statusInfo.contextDir, error.contextDir);
+      }
+    });
+
     console.log(`\nResults: ${passed} passed, ${failed} failed`);
   } finally {
     if (tmpDir) {

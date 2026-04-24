@@ -19,6 +19,8 @@ function createLoopiApp(env = {}) {
   const fetchImpl = env.fetch || globalThis.fetch;
   const navigatorImpl = env.navigator || globalThis.navigator || {};
   const confirmImpl = env.confirm || globalThis.confirm;
+  const setTimeoutImpl = env.setTimeout || globalThis.setTimeout;
+  const clearTimeoutImpl = env.clearTimeout || globalThis.clearTimeout;
   const {
     defaultConfig,
     clone,
@@ -52,9 +54,13 @@ function createLoopiApp(env = {}) {
     logFile: null,
     lastActionMessage: '',
     lastActionError: '',
+    initErrors: [],
     presetDraftName: '',
     rawEditorText: '',
-    contextStatus: null
+    rawEditorDirty: false,
+    contextStatus: null,
+    pendingActions: {},
+    contextBlocker: null
   };
 
   const dom = {
@@ -109,6 +115,9 @@ function createLoopiApp(env = {}) {
     defaultConfig,
     api,
     render,
+    documentImpl: document,
+    setTimeoutImpl,
+    clearTimeoutImpl,
     ensureConfigShape: uiState.ensureConfigShape,
     syncRawEditor: uiState.syncRawEditor,
     setConfigRaw: uiState.setConfigRaw,
@@ -159,12 +168,16 @@ function createLoopiApp(env = {}) {
     __test: {
       setConfigRaw: uiState.setConfigRaw,
       mutateDraft: uiState.mutateDraft,
+      init: actions.init,
       validateCurrentConfig: actions.validateCurrentConfig,
       refreshProviderStatus: actions.refreshProviderStatus,
       refreshRuns: actions.refreshRuns,
       refreshContextStatus: actions.refreshContextStatus,
       prepareContext: actions.prepareContext,
+      retryInit: actions.retryInit,
       runCurrentConfig: actions.runCurrentConfig,
+      scheduleSessionPolling: actions.scheduleSessionPolling,
+      stopSessionPolling: actions.stopSessionPolling,
       activeValidationMessage: uiState.activeValidationMessage,
       getPanelHtml(panelName) {
         if (panelName === 'hero') {

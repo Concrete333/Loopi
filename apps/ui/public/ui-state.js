@@ -39,14 +39,20 @@
       return true;
     }
 
-    function syncRawEditor() {
+    function syncRawEditor(options = {}) {
+      const preserveDirty = Boolean(options.preserveDirty);
+      if (preserveDirty && state.rawEditorDirty) {
+        return;
+      }
       if (state.configRaw && typeof state.configRaw === 'object') {
         state.rawEditorText = JSON.stringify(state.configRaw, null, 2);
+        state.rawEditorDirty = false;
         return;
       }
       state.rawEditorText = state.configResult && typeof state.configResult.rawText === 'string'
         ? state.configResult.rawText
         : '';
+      state.rawEditorDirty = false;
     }
 
     function setConfigRaw(nextConfig, { renderNow = true, draftMode = 'persisted' } = {}) {
@@ -77,7 +83,7 @@
       }
       mutator(state.configRaw);
       markDraftChanged();
-      syncRawEditor();
+      syncRawEditor({ preserveDirty: true });
       if (renderNow) {
         render();
       }

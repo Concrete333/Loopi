@@ -4,6 +4,7 @@ const { normalizeTaskConfig } = require('./task-config');
 const { resolveAgents } = require('./adapters');
 const { checkAllAdapterStatus, STATUS } = require('./setup-service');
 const { checkMultipleProviderStatus } = require('./provider-service');
+const { getPreparedContextStatus } = require('./context-index');
 
 const DOCTOR_PREFLIGHT_TIMEOUT_MS = 10000;
 
@@ -137,7 +138,8 @@ async function runTaskCheck({
   readFile = fs.readFile,
   normalizeConfig = normalizeTaskConfig,
   resolveCliAgents = resolveAgents,
-  checkProviders = checkMultipleProviderStatus
+  checkProviders = checkMultipleProviderStatus,
+  checkContextReadiness = getPreparedContextStatus
 } = {}) {
   const taskFile = taskPaths.legacyTaskFile(projectRoot);
   const lines = [];
@@ -172,8 +174,64 @@ async function runTaskCheck({
 
   lines.push(`[ok] Task config loaded: mode=${config.mode}, agents=${config.agents.join(', ')}`);
 
+  // Check prepared-context readiness using the same shared status helper the
+  // orchestrator and control plane use. This catches drift/mismatch before
+  // the user tries to run and gets blocked at launch time.
+  let hasContextFailure = false;
   if (config.context) {
     lines.push(`[ok] Context folder configured: ${config.context.dir}`);
+    let contextStatus;
+    try {
+      contextStatus = await checkContextReadiness(config.context, projectRoot);
+    } catch (error) {
+      hasContextFailure = true;
+      lines.push(`[fail] Prepared context readiness check failed: ${error.message}`);
+      contextStatus = null;
+    }
+
+    if (contextStatus) {
+      if (contextStatus.status === 'ready') {
+        lines.push('[ok] Prepared context cache is ready.');
+      } else if (contextStatus.status === 'ready-with-warnings') {
+        const skippedCount = Array.isArray(contextStatus.skippedSources) ? contextStatus.skippedSources.length : 0;
+        lines.push(`[warn] Prepared context cache is ready with ${skippedCount} skipped source${skippedCount === 1 ? '' : 's'}.`);
+      } else if (contextStatus.status === 'missing') {
+        hasContextFailure = true;
+        if (!contextStatus.cacheDir) {
+          lines.push('[fail] Context folder is missing or invalid.');
+        } else {
+          lines.push('[fail] Prepared context cache is missing.');
+        }
+        if (contextStatus.instructions) {
+          lines.push(`        → ${contextStatus.instructions}`);
+        }
+        if (!contextStatus.cacheDir) {
+          lines.push('[hint] Fix `context.dir` in `shared/task.json`, then retry doctor.');
+        } else {
+          lines.push('[hint] Run `npm run cli -- context prepare` to build the cache, then retry doctor.');
+        }
+      } else if (contextStatus.status === 'config-mismatch') {
+        hasContextFailure = true;
+        lines.push('[fail] Prepared context cache no longer matches the current task config.');
+        if (contextStatus.instructions) {
+          lines.push(`        → ${contextStatus.instructions}`);
+        }
+        lines.push('[hint] Run `npm run cli -- context prepare` to rebuild the cache.');
+      } else if (contextStatus.status === 'drifted') {
+        hasContextFailure = true;
+        const driftCount = Array.isArray(contextStatus.driftedSources) ? contextStatus.driftedSources.length : 0;
+        lines.push(`[fail] Prepared context cache is out of date (${driftCount} drifted source${driftCount === 1 ? '' : 's'}).`);
+        if (contextStatus.instructions) {
+          lines.push(`        → ${contextStatus.instructions}`);
+        }
+        lines.push('[hint] Run `npm run cli -- context prepare` to rebuild the cache.');
+      } else if (contextStatus.status === 'no-context') {
+        // Context was configured but resolved to no-context (empty dir value, etc.)
+        lines.push('[info] Context readiness returned no-context despite a configured dir; treating as no-op.');
+      } else {
+        lines.push(`[warn] Unexpected prepared-context status: ${contextStatus.status}`);
+      }
+    }
   } else {
     lines.push('[info] No context folder configured.');
   }
@@ -206,11 +264,15 @@ async function runTaskCheck({
         lines.push('[fail] This task uses configured HTTP providers, and at least one provider is not ready.');
         return { ok: false, lines, hasTaskFile: true };
       }
+      if (hasContextFailure) {
+        lines.push('[fail] Prepared context is not ready; runs will be blocked until it is prepared.');
+        return { ok: false, lines, hasTaskFile: true };
+      }
       lines.push('[ok] No CLI agents need checking; this task currently uses only configured HTTP providers.');
     } else {
       lines.push('[info] No CLI agents selected for this task.');
     }
-    return { ok: true, lines, hasTaskFile: true };
+    return { ok: !hasContextFailure, lines, hasTaskFile: true };
   }
 
   lines.push('[info] Checking CLI agents...');
@@ -227,6 +289,11 @@ async function runTaskCheck({
 
   if (hasProviderFailures) {
     lines.push('[fail] One or more configured HTTP providers are not ready.');
+    return { ok: false, lines, hasTaskFile: true };
+  }
+
+  if (hasContextFailure) {
+    lines.push('[fail] Prepared context is not ready; runs will be blocked until it is prepared.');
     return { ok: false, lines, hasTaskFile: true };
   }
 

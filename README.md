@@ -209,7 +209,7 @@ Then generate your first task interactively:
 npm run cli -- plan
 ```
 
-If your task uses a prepared `context` root, build the reusable context cache once before running:
+If your task uses a prepared `context` root, build the reusable context cache before the first run and rebuild it after context files or context rules change:
 
 ```powershell
 npm run cli -- context prepare
@@ -227,9 +227,15 @@ If you prefer a browser-based setup flow, launch the local UI:
 npm run ui
 ```
 
-That starts a localhost control plane for setup checks, task configuration, presets, and run monitoring. The UI now treats broken saved task files as first-class errors instead of hiding them, the Runs tab shows live background sessions while a run is still in flight, and the Setup tab can launch explicit install/login helpers for supported adapters. See [docs/ui.md](docs/ui.md) for the screen-by-screen guide.
+On Windows, the shipped repo also includes a clickable launcher in the repo root:
 
-If you configure `context` in the UI, the Settings tab can check draft-aware context status, prepare the cache in place, and block run launch early when the prepared cache is missing or stale instead of starting a doomed session.
+```text
+Launch Loopi UI.cmd
+```
+
+That starts a localhost control plane for setup checks, task configuration, presets, and run monitoring. The UI now treats broken saved task files as first-class errors instead of hiding them, the Runs tab shows live background sessions while a run is still in flight, and the Setup tab can launch explicit install/login helpers for supported adapters. `Run Now` validates the current draft before persisting it, so a blocked launch does not overwrite the saved task file, and session polling now slows down for hidden tabs or repeated failures instead of hammering at a fixed rate. See [docs/ui.md](docs/ui.md) for the screen-by-screen guide.
+
+If you configure `context` in the UI, the Settings tab can check draft-aware context status, distinguish an invalid context path from a missing prepared cache, prepare the cache in place, and block run launch early when the prepared cache is missing or stale instead of starting a doomed session.
 
 Typical flow:
 
@@ -353,6 +359,7 @@ Each run leaves behind a lightweight audit trail so a human can go back later an
 The main files and folders to look at are:
 
 - `shared/scratchpad.txt`
+- `shared/log.json`
 - `shared/runs.ndjson`
 - `shared/tasks/<runId>/task.json`
 - `shared/tasks/<runId>/steps.ndjson`
@@ -362,6 +369,7 @@ The main files and folders to look at are:
 In practice:
 
 - `scratchpad.txt` is the fastest human-readable summary
+- `log.json` is the legacy machine-readable run log
 - `steps.ndjson` tells you which agent ran which stage and when
 - `worktree-snapshot` artifacts capture run-start, pre-step, post-step, and run-end states; patch files are persisted for run-start/post-step/run-end, while pre-step is metadata-only by default
 - `fork-record` artifacts record manual lineage when one run is explicitly based on an earlier run or step
@@ -409,7 +417,7 @@ See [LICENSE](./LICENSE) for the full license text and [LICENSING.md](./LICENSIN
 
 ## Troubleshooting
 
-- Run `npm run cli -- doctor` first. Without a task file it performs an environment/setup check; with `shared/task.json` present it also validates the task configuration and selected agents.
+- Run `npm run cli -- doctor` first. Without a task file it performs an environment/setup check; with `shared/task.json` present it also validates the task configuration, selected agents, and prepared-context readiness when `context` is configured.
 - If your task uses `context`, run `npm run cli -- context prepare` after changing context files, include/exclude patterns, or manifest annotations. `npm run context:prepare` is the equivalent shortcut.
 - If an agent is installed but not detected, set the matching `LOOPI_*` override.
 - To find an installed CLI path on Windows, use `where.exe claude`, `where.exe codex`, `where.exe gemini`, and so on.

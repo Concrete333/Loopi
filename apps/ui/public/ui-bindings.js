@@ -36,7 +36,15 @@
       tabButtonsBound = true;
       document.querySelectorAll('[data-tab]').forEach((button) => {
         button.addEventListener('click', () => {
-          state.activeTab = button.getAttribute('data-tab');
+          const nextTab = button.getAttribute('data-tab');
+          if (nextTab !== state.activeTab) {
+            // Messages are scoped to the tab that produced them. Clearing on
+            // tab change keeps a Setup success note from bleeding into the
+            // Composer panel.
+            state.lastActionMessage = '';
+            state.lastActionError = '';
+          }
+          state.activeTab = nextTab;
           if (state.activeTab === 'runs') {
             actions.scheduleSessionPolling();
           } else {
@@ -73,20 +81,30 @@
         }));
       }
 
+      const retryInitButton = document.getElementById('retry-init-status');
+      if (retryInitButton) {
+        retryInitButton.addEventListener('click', async () => actions.performAction(
+          actions.retryInit,
+          { pending: 'retryInit' }
+        ));
+      }
+
       document.querySelectorAll('[data-provider-test]').forEach((button) => {
-        button.addEventListener('click', async () => actions.performAction(async () => {
-          assertDraftAvailable('Provider testing');
+        button.addEventListener('click', async () => {
           const providerId = button.getAttribute('data-provider-test');
-          const providerConfig = state.configRaw.providers[providerId];
-          const result = await api('/api/providers/test', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ providerId, providerConfig })
-          });
-          actions.ensureProviderStatus();
-          state.providerStatus.providers[providerId] = result;
-          state.lastActionMessage = `Provider "${providerId}" tested.`;
-        }));
+          return actions.performAction(async () => {
+            assertDraftAvailable('Provider testing');
+            const providerConfig = state.configRaw.providers[providerId];
+            const result = await api('/api/providers/test', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ providerId, providerConfig })
+            });
+            actions.ensureProviderStatus();
+            state.providerStatus.providers[providerId] = result;
+            state.lastActionMessage = `Provider "${providerId}" tested.`;
+          }, { pending: `provider:${providerId}` });
+        });
       });
 
       document.querySelectorAll('[data-copy]').forEach((button) => {
@@ -153,7 +171,10 @@
 
       const prepareContextButton = document.getElementById('prepare-context');
       if (prepareContextButton) {
-        prepareContextButton.addEventListener('click', async () => actions.performAction(actions.prepareContext));
+        prepareContextButton.addEventListener('click', async () => actions.performAction(
+          actions.prepareContext,
+          { pending: 'prepareContext' }
+        ));
       }
 
       const refreshContextButton = document.getElementById('refresh-context-status');
@@ -225,7 +246,8 @@
       const addProviderButton = document.getElementById('add-provider');
       if (addProviderButton) {
         addProviderButton.addEventListener('click', () => {
-          const providerId = document.getElementById('new-provider-id').value.trim().toLowerCase();
+          const rawId = document.getElementById('new-provider-id').value.trim();
+          const providerId = rawId.toLowerCase();
           const baseUrl = document.getElementById('new-provider-baseUrl').value.trim();
           const model = document.getElementById('new-provider-model').value.trim();
           if (!providerId) {
@@ -238,7 +260,9 @@
             baseUrl,
             model
           });
-          state.lastActionMessage = `Provider "${providerId}" added to the draft config.`;
+          state.lastActionMessage = rawId !== providerId
+            ? `Provider "${providerId}" added to the draft config (normalized from "${rawId}"; provider IDs are stored lowercase).`
+            : `Provider "${providerId}" added to the draft config.`;
         });
       }
 
@@ -270,6 +294,18 @@
           }, { renderNow: false });
         });
       });
+
+      const rawEditor = document.getElementById('raw-editor');
+      if (rawEditor) {
+        rawEditor.addEventListener('input', () => {
+          // Preserve in-progress keystrokes across unrelated renders. A render()
+          // rebuilds the textarea from state.rawEditorText, so without this
+          // sync the user loses typing whenever any other field triggers a
+          // render. We intentionally do not re-render on each keystroke.
+          state.rawEditorText = rawEditor.value;
+          state.rawEditorDirty = true;
+        });
+      }
 
       const applyRawButton = document.getElementById('apply-raw-json');
       if (applyRawButton) {
@@ -354,22 +390,34 @@
 
       const validateButton = document.getElementById('validate-config');
       if (validateButton) {
-        validateButton.addEventListener('click', async () => actions.performAction(actions.validateCurrentConfig));
+        validateButton.addEventListener('click', async () => actions.performAction(
+          actions.validateCurrentConfig,
+          { pending: 'validate' }
+        ));
       }
 
       const saveButton = document.getElementById('save-config');
       if (saveButton) {
-        saveButton.addEventListener('click', async () => actions.performAction(actions.saveCurrentConfig));
+        saveButton.addEventListener('click', async () => actions.performAction(
+          actions.saveCurrentConfig,
+          { pending: 'save' }
+        ));
       }
 
       const runButton = document.getElementById('run-config');
       if (runButton) {
-        runButton.addEventListener('click', async () => actions.performAction(actions.runCurrentConfig));
+        runButton.addEventListener('click', async () => actions.performAction(
+          actions.runCurrentConfig,
+          { pending: 'run' }
+        ));
       }
 
       const savePresetButton = document.getElementById('save-preset');
       if (savePresetButton) {
-        savePresetButton.addEventListener('click', async () => actions.performAction(actions.savePreset));
+        savePresetButton.addEventListener('click', async () => actions.performAction(
+          actions.savePreset,
+          { pending: 'savePreset' }
+        ));
       }
     }
 
@@ -407,6 +455,33 @@
       document.querySelectorAll('[data-start-new-draft]').forEach((button) => {
         button.addEventListener('click', () => {
           startNewDraft();
+        });
+      });
+      document.querySelectorAll('[data-dismiss-context-blocker]').forEach((button) => {
+        button.addEventListener('click', () => {
+          state.contextBlocker = null;
+          render();
+        });
+      });
+      // Dynamic tab-navigation buttons rendered inside banners/messages.
+      // Distinct from the persistent header tabs (data-tab), which are bound
+      // once with tabButtonsBound. These re-bind every render because they
+      // live inside rendered innerHTML and the elements are recreated.
+      document.querySelectorAll('[data-goto-tab]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const nextTab = button.getAttribute('data-goto-tab');
+          if (!nextTab || nextTab === state.activeTab) {
+            return;
+          }
+          state.lastActionMessage = '';
+          state.lastActionError = '';
+          state.activeTab = nextTab;
+          if (state.activeTab === 'runs') {
+            actions.scheduleSessionPolling();
+          } else {
+            actions.stopSessionPolling();
+          }
+          render();
         });
       });
     }

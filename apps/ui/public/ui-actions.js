@@ -11,6 +11,9 @@
       defaultConfig,
       api,
       render,
+      documentImpl,
+      setTimeoutImpl,
+      clearTimeoutImpl,
       ensureConfigShape,
       syncRawEditor,
       setConfigRaw,
@@ -19,7 +22,12 @@
       findPreferredActiveSessionId
     } = deps;
 
+    const BASE_SESSION_POLL_DELAY_MS = 1500;
+    const HIDDEN_SESSION_POLL_DELAY_MS = 10000;
+    const MAX_SESSION_POLL_DELAY_MS = 12000;
+
     let sessionPollTimer = null;
+    let sessionPollFailureCount = 0;
 
     function actionErrorMessage(errorLike) {
       if (!errorLike) {
@@ -151,9 +159,32 @@
 
     function stopSessionPolling() {
       if (sessionPollTimer) {
-        clearTimeout(sessionPollTimer);
+        clearTimeoutImpl(sessionPollTimer);
         sessionPollTimer = null;
       }
+    }
+
+    function resetSessionPollingBackoff() {
+      sessionPollFailureCount = 0;
+    }
+
+    function currentVisibilityState() {
+      return documentImpl && typeof documentImpl.visibilityState === 'string'
+        ? documentImpl.visibilityState
+        : 'visible';
+    }
+
+    function nextSessionPollDelayMs() {
+      if (currentVisibilityState() === 'hidden') {
+        return HIDDEN_SESSION_POLL_DELAY_MS;
+      }
+      if (sessionPollFailureCount <= 0) {
+        return BASE_SESSION_POLL_DELAY_MS;
+      }
+      return Math.min(
+        BASE_SESSION_POLL_DELAY_MS * Math.pow(2, sessionPollFailureCount),
+        MAX_SESSION_POLL_DELAY_MS
+      );
     }
 
     function scheduleSessionPolling() {
@@ -163,23 +194,32 @@
       }
       state.activeSessionId = findPreferredActiveSessionId();
       if (!state.activeSessionId) {
+        resetSessionPollingBackoff();
         return;
       }
       const session = getRunSession(state.activeSessionId);
       if (!session || !session.active) {
         state.activeSessionId = null;
+        resetSessionPollingBackoff();
         return;
       }
-      sessionPollTimer = setTimeout(async () => {
+      sessionPollTimer = setTimeoutImpl(async () => {
+        if (currentVisibilityState() === 'hidden') {
+          render();
+          scheduleSessionPolling();
+          return;
+        }
         try {
           await refreshRuns();
           await refreshFiles();
+          resetSessionPollingBackoff();
         } catch (error) {
-          state.lastActionError = error.message;
+          sessionPollFailureCount += 1;
+          state.lastActionError = actionErrorMessage(error);
         }
         render();
         scheduleSessionPolling();
-      }, 1500);
+      }, nextSessionPollDelayMs());
     }
 
     async function validateCurrentConfig() {
@@ -219,8 +259,9 @@
         body: JSON.stringify({ rawConfig: state.configRaw })
       });
       if (!result.success) {
+        const isContextError = Boolean(result.error && result.error.code && String(result.error.code).startsWith('CONTEXT_'));
         state.lastActionError = actionErrorMessage(result.error) || 'Run failed.';
-        state.lastActionMessage = (result.error && result.error.code && String(result.error.code).startsWith('CONTEXT_'))
+        state.lastActionMessage = isContextError
           ? 'Context preparation is required before running.'
           : (result.runId ? `Run ${result.runId} failed.` : '');
         if (result.contextStatus) {
@@ -228,8 +269,21 @@
         } else if (result.error && result.error.contextStatus) {
           state.contextStatus = result.error.contextStatus;
         }
-        if (result.error && result.error.code && String(result.error.code).startsWith('CONTEXT_')) {
-          state.activeTab = 'settings';
+        if (isContextError) {
+          // Instead of teleporting the user to Settings, surface the blocker
+          // inline on whichever tab they launched from. The banner rendered
+          // from state.contextBlocker carries the specific instructions and a
+          // link to the Settings panel where context is prepared.
+          state.contextBlocker = {
+            code: result.error && result.error.code ? result.error.code : 'CONTEXT_BLOCKED',
+            message: actionErrorMessage(result.error) || 'Prepared context is not ready.',
+            instructions: (result.error && result.error.instructions)
+              || (result.contextStatus && result.contextStatus.instructions)
+              || null,
+            contextStatus: result.contextStatus || (result.error && result.error.contextStatus) || null
+          };
+        } else {
+          state.contextBlocker = null;
         }
       } else {
         state.lastActionMessage = `Run ${result.runId} started.`;
@@ -237,6 +291,8 @@
         state.activeSessionId = result.runId;
         state.selectedRunId = result.runId;
         state.activeTab = 'runs';
+        state.contextBlocker = null;
+        resetSessionPollingBackoff();
       }
       await refreshRuns();
       await refreshFiles();
@@ -276,13 +332,43 @@
       }
     }
 
-    async function performAction(fn) {
+    function setPending(name, value) {
+      if (!state.pendingActions || typeof state.pendingActions !== 'object') {
+        state.pendingActions = {};
+      }
+      if (!name) {
+        return;
+      }
+      if (value) {
+        state.pendingActions[name] = true;
+      } else {
+        delete state.pendingActions[name];
+      }
+    }
+
+    async function performAction(fn, options = {}) {
+      const pendingKey = options && typeof options.pending === 'string' ? options.pending : null;
       state.lastActionMessage = '';
       state.lastActionError = '';
+      if (pendingKey) {
+        if (state.pendingActions && state.pendingActions[pendingKey]) {
+          // Duplicate click while the action is still in flight. Silently
+          // ignore rather than queuing a second run.
+          return;
+        }
+        setPending(pendingKey, true);
+        // Render immediately so the button reflects busy state before the
+        // async work begins.
+        render();
+      }
       try {
         await fn();
       } catch (error) {
         state.lastActionError = error.message;
+      } finally {
+        if (pendingKey) {
+          setPending(pendingKey, false);
+        }
       }
       render();
     }
@@ -312,33 +398,76 @@
         throw new Error(result.error || 'Context preparation failed.');
       }
       await refreshContextStatus();
-      state.lastActionMessage = `Context prepared: ${result.sourceCount} sources indexed.`;
+      // Preparation succeeded; whatever blocked an earlier run is either
+      // resolved or will be re-detected by the next launch. Drop the stale
+      // blocker banner either way.
+      state.contextBlocker = null;
+      // Report honest counts: distinguish "some files were skipped" from
+      // "everything indexed" so the user never assumes skipped files were
+      // used successfully.
+      if (result.skippedCount > 0) {
+        state.lastActionMessage = `Context prepared: ${result.indexedCount} indexed, ${result.skippedCount} skipped.`;
+      } else {
+        state.lastActionMessage = `Context prepared: ${result.sourceCount} sources indexed.`;
+      }
     }
 
     async function init() {
+      state.initErrors = [];
+      state.lastActionError = '';
       try {
         await refreshBootstrap();
-        await refreshConfig();
-        await Promise.all([
-          refreshSetup(),
-          refreshProviderStatus(),
-          refreshRuns(),
-          refreshFiles(),
-          refreshContextStatus()
-        ]);
       } catch (error) {
-        state.lastActionError = error.message;
-        if (!state.configRaw) {
-          state.configRaw = defaultConfig();
-          ensureConfigShape();
-          syncRawEditor();
+        state.initErrors.push({ refresher: 'bootstrap', message: error.message });
+      }
+      try {
+        await refreshConfig();
+      } catch (error) {
+        state.initErrors.push({ refresher: 'config', message: error.message });
+      }
+
+      const refreshers = [
+        { name: 'setup', fn: refreshSetup },
+        { name: 'providers', fn: refreshProviderStatus },
+        { name: 'runs', fn: refreshRuns },
+        { name: 'files', fn: refreshFiles },
+        { name: 'context', fn: refreshContextStatus }
+      ];
+
+      const settled = await Promise.allSettled(refreshers.map(function (r) { return r.fn(); }));
+      settled.forEach(function (result, i) {
+        if (result.status === 'rejected') {
+          state.initErrors.push({
+            refresher: refreshers[i].name,
+            message: result.reason && result.reason.message ? result.reason.message : 'Unknown error'
+          });
         }
+      });
+
+      if (state.initErrors.length > 0) {
+        state.lastActionError = state.initErrors.map(function (e) { return e.refresher + ': ' + e.message; }).join('; ');
+      }
+
+      if (!state.configRaw) {
+        state.configRaw = defaultConfig();
+        ensureConfigShape();
+        syncRawEditor();
       }
       render();
     }
 
+    async function retryInit() {
+      await init();
+      if (!state.initErrors || state.initErrors.length === 0) {
+        state.lastActionMessage = 'Startup checks refreshed.';
+        state.lastActionError = '';
+        render();
+      }
+    }
+
     return {
       init,
+      retryInit,
       refreshBootstrap,
       refreshSetup,
       runAdapterInstall,

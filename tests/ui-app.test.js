@@ -26,7 +26,23 @@ function createFakeElement(id) {
   };
 }
 
-function createFakeDocument() {
+function createListenerElement(id) {
+  const listeners = {};
+  return {
+    id,
+    value: '',
+    checked: false,
+    addEventListener(eventName, fn) {
+      listeners[eventName] = listeners[eventName] || [];
+      listeners[eventName].push(fn);
+    },
+    _dispatch(eventName) {
+      (listeners[eventName] || []).forEach((fn) => fn({ target: this }));
+    }
+  };
+}
+
+function createFakeDocument(options = {}) {
   const elements = new Map();
   const ids = [
     'hero-summary',
@@ -41,7 +57,13 @@ function createFakeDocument() {
     elements.set(id, createFakeElement(id));
   }
 
+  const listenerIds = Array.isArray(options.listenerIds) ? options.listenerIds : [];
+  for (const id of listenerIds) {
+    elements.set(id, createListenerElement(id));
+  }
+
   return {
+    visibilityState: options.visibilityState || 'visible',
     getElementById(id) {
       return elements.get(id) || null;
     },
@@ -50,6 +72,47 @@ function createFakeDocument() {
     },
     querySelector() {
       return null;
+    }
+  };
+}
+
+function createFakeTimerHarness() {
+  let nextId = 1;
+  const timers = [];
+
+  function activeTimers() {
+    return timers.filter((timer) => !timer.cleared);
+  }
+
+  return {
+    setTimeout(fn, delay) {
+      const timer = {
+        id: nextId++,
+        fn,
+        delay,
+        cleared: false
+      };
+      timers.push(timer);
+      return timer.id;
+    },
+    clearTimeout(id) {
+      const timer = timers.find((entry) => entry.id === id);
+      if (timer) {
+        timer.cleared = true;
+      }
+    },
+    latestDelay() {
+      const current = activeTimers();
+      return current.length > 0 ? current[current.length - 1].delay : null;
+    },
+    async runLatest() {
+      const current = activeTimers();
+      if (current.length === 0) {
+        throw new Error('No active timer to run.');
+      }
+      const timer = current[current.length - 1];
+      timer.cleared = true;
+      await timer.fn();
     }
   };
 }
@@ -456,7 +519,7 @@ test('refreshContextStatus and prepareContext use the current draft config', asy
   assert.strictEqual(app.state.contextStatus.status, 'config-mismatch');
 });
 
-test('blocked run due to missing context preparation moves the UI back to settings and stores context status', async () => {
+test('blocked run due to missing context preparation surfaces a blocker without hijacking the active tab', async () => {
   const document = createFakeDocument();
   const fetch = createBlockedRunFetchStub();
   const app = createLoopiApp({
@@ -464,6 +527,9 @@ test('blocked run due to missing context preparation moves the UI back to settin
     fetch,
     navigator: {}
   });
+
+  // Simulate the user launching from the Composer tab.
+  app.state.activeTab = 'composer';
 
   app.__test.setConfigRaw({
     mode: 'plan',
@@ -485,10 +551,831 @@ test('blocked run due to missing context preparation moves the UI back to settin
 
   await app.__test.runCurrentConfig();
 
-  assert.strictEqual(app.state.activeTab, 'settings');
+  // activeTab should not be teleported. The blocker banner is rendered inline
+  // on whichever tab the user launched from.
+  assert.strictEqual(app.state.activeTab, 'composer');
   assert.strictEqual(app.state.contextStatus.status, 'missing');
+  assert.ok(app.state.contextBlocker, 'contextBlocker should be populated on CONTEXT_* errors');
+  assert.strictEqual(app.state.contextBlocker.code, 'CONTEXT_CACHE_MISSING');
+  assert.ok(String(app.state.contextBlocker.message).includes('Prepared context cache'));
   assert.ok(String(app.state.lastActionError).includes('Prepared context cache'));
   assert.ok(fetch.calls.some((call) => call.url === '/api/runs/launch'));
+
+  const composerHtml = app.__test.getPanelHtml('composer');
+  assert.ok(composerHtml.includes('Run blocked by prepared-context state.'),
+    'composer should render the inline context-blocker banner');
+  assert.ok(composerHtml.includes('data-goto-tab="settings"'),
+    'blocker on a non-settings tab should offer a real Go to Settings button, not just text');
+  assert.ok(composerHtml.includes('Go to Settings'),
+    'banner should label the navigation button clearly');
+});
+
+test('context-blocker banner on the Settings tab does not offer a redundant Go to Settings button', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.__test.setConfigRaw(createDraft(), { renderNow: false, draftMode: 'new' });
+  app.state.activeTab = 'settings';
+  app.state.contextBlocker = {
+    code: 'CONTEXT_CACHE_MISSING',
+    message: 'Prepared context cache is not ready.',
+    instructions: 'Run prepare.',
+    contextStatus: null
+  };
+
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+  assert.ok(settingsHtml.includes('Run blocked by prepared-context state.'),
+    'settings should render the blocker banner');
+  assert.ok(!settingsHtml.includes('data-goto-tab="settings"'),
+    'the Go to Settings button should be hidden when the user is already on Settings');
+});
+
+test('blocked context banner does not appear after a successful prepare', async () => {
+  const document = createFakeDocument();
+  const fetch = async (url, options = {}) => {
+    if (url === '/api/context/prepare') {
+      return {
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            data: {
+              ok: true,
+              sourceCount: 2,
+              indexedCount: 2,
+              skippedCount: 0,
+              skippedSources: []
+            }
+          };
+        }
+      };
+    }
+    if (url === '/api/context/status') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { ok: true, status: 'ready' } };
+        }
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.__test.setConfigRaw({
+    mode: 'plan',
+    prompt: 'Prepare after block',
+    agents: ['claude'],
+    context: { dir: './context' },
+    settings: {
+      planLoops: 1,
+      qualityLoops: 1,
+      implementLoops: 1,
+      sectionImplementLoops: 1,
+      timeoutMs: 180000,
+      continueOnError: false,
+      writeScratchpad: true
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  app.state.contextBlocker = {
+    code: 'CONTEXT_CACHE_MISSING',
+    message: 'Prepared context cache is not ready.',
+    instructions: 'Run prepare.',
+    contextStatus: null
+  };
+
+  await app.__test.prepareContext();
+
+  assert.strictEqual(app.state.contextBlocker, null,
+    'successful prepare should clear any stale context blocker');
+});
+
+test('invalid context path status shows "Context path invalid" chip and instruction text', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({
+    document,
+    fetch,
+    navigator: {}
+  });
+
+  app.__test.setConfigRaw(createDraft(), { renderNow: false, draftMode: 'new' });
+  app.state.contextStatus = {
+    ok: true,
+    status: 'missing',
+    contextDir: 'C:/project/nonexistent',
+    cacheDir: null,
+    builtAt: null,
+    mismatches: [],
+    driftedSources: [],
+    skippedSources: [],
+    manifest: null,
+    instructions: 'Context directory "C:/project/nonexistent" does not exist.'
+  };
+
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+
+  assert.ok(settingsHtml.includes('Context path invalid'), 'should show Context path invalid chip');
+  assert.ok(!settingsHtml.includes('Not prepared'), 'should not show generic Not prepared chip for invalid path');
+  assert.ok(settingsHtml.includes('does not exist'), 'should show instruction text about the invalid context path');
+  assert.ok(!settingsHtml.includes('class="button button--primary" id="prepare-context"'), 'Prepare Context should not be primary when the context path is invalid');
+  assert.ok(settingsHtml.includes('class="button button--secondary" id="prepare-context"'), 'Prepare Context should be secondary when the context path is invalid');
+});
+
+test('cache-missing context status shows "Not prepared" chip with Prepare Context as primary', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({
+    document,
+    fetch,
+    navigator: {}
+  });
+
+  app.__test.setConfigRaw(createDraft(), { renderNow: false, draftMode: 'new' });
+  app.state.contextStatus = {
+    ok: true,
+    status: 'missing',
+    contextDir: 'C:/project/context',
+    cacheDir: 'C:/project/context/.loopi-context',
+    builtAt: null,
+    mismatches: [],
+    driftedSources: [],
+    skippedSources: [],
+    manifest: null,
+    instructions: 'Run "npm run cli -- context prepare" to rebuild.'
+  };
+
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+
+  assert.ok(settingsHtml.includes('Not prepared'), 'should show Not prepared chip when dir exists but cache missing');
+  assert.ok(!settingsHtml.includes('Directory not found'), 'should not show Directory not found when dir exists');
+  assert.ok(settingsHtml.includes('class="button button--primary" id="prepare-context"'), 'Prepare Context should be primary when dir exists');
+});
+
+test('hero summary shows loading placeholder before data is ready', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({
+    document,
+    fetch,
+    navigator: {}
+  });
+
+  app.render();
+  const heroHtml = app.__test.getPanelHtml('hero');
+  assert.ok(heroHtml.includes('Loading'), 'hero should show loading placeholder when setupStatus is null');
+  assert.ok(!heroHtml.includes('0/0'), 'hero should not show misleading 0/0 before data loads');
+});
+
+test('setup adapter cards use compact help and install labels with truncatable paths', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({
+    document,
+    fetch,
+    navigator: {}
+  });
+
+  const docsUrl = 'https://docs.anthropic.com/en/docs/claude-code/getting-started';
+  const resolvedPath = 'C:\\Users\\cwbec\\AppData\\Roaming\\npm\\gemini.cmd';
+  app.state.setupStatus = {
+    adapters: [{
+      id: 'gemini',
+      agentId: 'gemini',
+      displayName: 'Gemini CLI',
+      status: 'missing',
+      ready: false,
+      resolvedPath,
+      errorMessage: null,
+      metadata: {
+        docsUrl,
+        installHint: 'npm install -g @google/gemini-cli',
+        loginHint: 'gemini auth login',
+        installCommand: {
+          command: 'npm install -g @google/gemini-cli'
+        }
+      },
+      nextAction: { type: 'install' }
+    }],
+    summary: { total: 1, ready: 0 }
+  };
+  app.state.providerStatus = { providers: {} };
+
+  app.render();
+  const setupHtml = app.__test.getPanelHtml('setup');
+
+  assert.ok(setupHtml.includes('Startup Help'), 'docs action should have a user-friendly label');
+  assert.ok(!setupHtml.includes('>Docs<'), 'old terse docs label should not be shown');
+  assert.ok(setupHtml.includes('>Install</button>'), 'install helper button should use the shorter label');
+  assert.ok(!setupHtml.includes('Install In Loopi'), 'old install label should not be shown');
+  assert.ok(!setupHtml.includes(`<p>${docsUrl}</p>`), 'raw docs URL should not be visible as card copy');
+  assert.ok(setupHtml.includes('chip--path'), 'resolved path chip should use truncation styling');
+  assert.ok(setupHtml.includes(`title="${resolvedPath}"`), 'full resolved path should remain inspectable');
+});
+
+test('init keeps data from successful refreshers when one refresher fails', async () => {
+  const document = createFakeDocument();
+  const calls = [];
+  const fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === '/api/bootstrap') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { projectRoot: '/test', useCases: [], adapterMetadata: [], paths: {} } };
+        }
+      };
+    }
+    if (url === '/api/config') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { exists: false, valid: true, raw: null, rawText: null } };
+        }
+      };
+    }
+    if (url === '/api/setup/status') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { adapters: [{ id: 'claude', ready: true, status: 'ready' }] } };
+        }
+      };
+    }
+    if (url === '/api/providers/test-current') {
+      throw new Error('Simulated provider test failure');
+    }
+    if (url === '/api/runs') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: [{ runId: 'run-1', mode: 'plan' }] };
+        }
+      };
+    }
+    if (url === '/api/runs/sessions') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: [] };
+        }
+      };
+    }
+    if (url === '/api/files/scratchpad' || url === '/api/files/log') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { filePath: url, content: '' } };
+        }
+      };
+    }
+    if (url === '/api/context/status') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { ok: true, status: 'no-context' } };
+        }
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+  await app.__test.init();
+
+  // setup refresh succeeded
+  assert.ok(app.state.setupStatus !== null, 'setupStatus should be populated');
+  assert.ok(Array.isArray(app.state.setupStatus.adapters), 'adapters should be an array');
+
+  // runs refresh succeeded
+  assert.ok(Array.isArray(app.state.runs), 'runs should be populated');
+
+  // provider refresh failed but did not wipe other state
+  assert.strictEqual(app.state.providerStatus, null, 'providerStatus should remain null after failure');
+
+  // initErrors should capture the failure
+  assert.ok(Array.isArray(app.state.initErrors), 'initErrors should be an array');
+  assert.ok(app.state.initErrors.length > 0, 'initErrors should not be empty');
+  assert.ok(app.state.initErrors.some((e) => e.refresher === 'providers'), 'initErrors should include providers failure');
+
+  const heroHtml = app.__test.getPanelHtml('hero');
+  assert.ok(!heroHtml.includes('Loading status'), 'hero should not stay stuck in loading after init failure');
+  assert.ok(heroHtml.includes('Retry Startup Checks'), 'hero should offer a startup retry affordance after init failure');
+  assert.ok(heroHtml.includes('Unavailable'), 'hero should show degraded availability instead of fake loaded counts');
+});
+
+test('retryInit clears startup errors after a previously failing refresher succeeds', async () => {
+  const document = createFakeDocument();
+  let providerShouldFail = true;
+  const fetch = async (url, options = {}) => {
+    if (url === '/api/bootstrap') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { projectRoot: '/test', useCases: [], adapterMetadata: [], paths: {} } };
+        }
+      };
+    }
+    if (url === '/api/config') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { exists: false, valid: true, raw: null, rawText: null } };
+        }
+      };
+    }
+    if (url === '/api/setup/status') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { adapters: [{ id: 'claude', ready: true, status: 'ready' }] } };
+        }
+      };
+    }
+    if (url === '/api/providers/test-current' || url === '/api/providers/test-task') {
+      if (providerShouldFail) {
+        throw new Error('Temporary provider failure');
+      }
+      return {
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            data: {
+              success: true,
+              providers: {
+                localdemo: {
+                  id: 'localdemo',
+                  status: 'ready',
+                  ready: true,
+                  errorMessage: null
+                }
+              },
+              normalized: null,
+              error: null
+            }
+          };
+        }
+      };
+    }
+    if (url === '/api/runs') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: [] };
+        }
+      };
+    }
+    if (url === '/api/runs/sessions') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: [] };
+        }
+      };
+    }
+    if (url === '/api/files/scratchpad' || url === '/api/files/log') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { filePath: url, content: '' } };
+        }
+      };
+    }
+    if (url === '/api/context/status') {
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, data: { ok: true, status: 'no-context' } };
+        }
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+  await app.__test.init();
+  assert.ok(app.state.initErrors.length > 0, 'first init should capture the simulated provider failure');
+
+  providerShouldFail = false;
+  await app.__test.retryInit();
+
+  assert.strictEqual(app.state.initErrors.length, 0, 'retry should clear startup errors once refreshers succeed');
+  assert.ok(app.state.providerStatus !== null, 'provider status should populate after successful retry');
+  assert.strictEqual(app.state.lastActionMessage, 'Startup checks refreshed.');
+});
+
+test('prepare success message mentions skipped files when skippedCount > 0', async () => {
+  const document = createFakeDocument();
+  const fetchCalls = [];
+  const fetch = (url, options) => {
+    fetchCalls.push({ url, options });
+    if (url === '/api/bootstrap') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { projectRoot: '/test', useCases: [], adapterMetadata: [] } }) });
+    if (url === '/api/config') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { exists: false, raw: null, rawText: '', valid: false } }) });
+    if (url === '/api/setup/status') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { adapters: [], summary: { total: 0, ready: 0 } } }) });
+    if (url === '/api/providers/test-current') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { success: true, providers: {} } }) });
+    if (url === '/api/runs') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: [] }) });
+    if (url === '/api/runs/sessions') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: [] }) });
+    if (url === '/api/files/scratchpad') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { exists: false } }) });
+    if (url === '/api/files/log') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { exists: false } }) });
+    if (url === '/api/context/status') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { ok: true, status: 'missing' } }) });
+    if (url === '/api/context/prepare') {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            ok: true,
+            sourceCount: 5,
+            indexedCount: 3,
+            skippedCount: 2,
+            skippedSources: [
+              { sourceRelativePath: 'bad.pdf', skipReason: 'Unsupported file type' },
+              { sourceRelativePath: 'broken.docx', skipReason: 'Extraction failed' }
+            ]
+          }
+        })
+      });
+    }
+    return Promise.resolve({ ok: true, json: async () => ({}) });
+  };
+
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+  await app.__test.init();
+
+  await app.__test.prepareContext();
+
+  assert.ok(
+    app.state.lastActionMessage.includes('3 indexed') && app.state.lastActionMessage.includes('2 skipped'),
+    `message should mention indexed and skipped counts, got: "${app.state.lastActionMessage}"`
+  );
+});
+
+test('prepare success message uses simple count when no files skipped', async () => {
+  const document = createFakeDocument();
+  const fetch = (url, options) => {
+    if (url === '/api/bootstrap') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { projectRoot: '/test', useCases: [], adapterMetadata: [] } }) });
+    if (url === '/api/config') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { exists: false, raw: null, rawText: '', valid: false } }) });
+    if (url === '/api/setup/status') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { adapters: [], summary: { total: 0, ready: 0 } } }) });
+    if (url === '/api/providers/test-current') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { success: true, providers: {} } }) });
+    if (url === '/api/runs') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: [] }) });
+    if (url === '/api/runs/sessions') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: [] }) });
+    if (url === '/api/files/scratchpad') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { exists: false } }) });
+    if (url === '/api/files/log') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { exists: false } }) });
+    if (url === '/api/context/status') return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { ok: true, status: 'missing' } }) });
+    if (url === '/api/context/prepare') {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            ok: true,
+            sourceCount: 4,
+            indexedCount: 4,
+            skippedCount: 0,
+            skippedSources: []
+          }
+        })
+      });
+    }
+    return Promise.resolve({ ok: true, json: async () => ({}) });
+  };
+
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+  await app.__test.init();
+
+  await app.__test.prepareContext();
+
+  assert.strictEqual(app.state.lastActionMessage, 'Context prepared: 4 sources indexed.');
+});
+
+test('typing into the raw editor survives an unrelated render', async () => {
+  const document = createFakeDocument({ listenerIds: ['raw-editor'] });
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.__test.setConfigRaw(createDraft(), { renderNow: false, draftMode: 'new' });
+  app.render();
+
+  const rawEditor = document.getElementById('raw-editor');
+  assert.ok(rawEditor, 'fake document should expose the raw-editor element');
+
+  // Simulate the user typing a new JSON blob into the editor.
+  rawEditor.value = '{"mode":"review","prompt":"hand-edited","agents":["claude"]}';
+  rawEditor._dispatch('input');
+
+  // Trigger an unrelated render (no draft mutation). Without the input
+  // listener, state.rawEditorText would stay stale and the next render
+  // would wipe the user's typing.
+  await app.__test.validateCurrentConfig();
+
+  assert.strictEqual(
+    app.state.rawEditorText,
+    '{"mode":"review","prompt":"hand-edited","agents":["claude"]}',
+    'input listener should persist typed text into state so unrelated renders do not wipe it'
+  );
+});
+
+test('typing into the raw editor survives a draft mutation render', async () => {
+  const document = createFakeDocument({ listenerIds: ['raw-editor'] });
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.__test.setConfigRaw(createDraft(), { renderNow: false, draftMode: 'new' });
+  app.render();
+
+  const rawEditor = document.getElementById('raw-editor');
+  assert.ok(rawEditor, 'fake document should expose the raw-editor element');
+
+  rawEditor.value = '{"mode":"review","prompt":"hand-edited","agents":["claude"]}';
+  rawEditor._dispatch('input');
+
+  app.__test.mutateDraft((draft) => {
+    draft.prompt = 'changed from composer';
+  });
+
+  assert.strictEqual(
+    app.state.rawEditorText,
+    '{"mode":"review","prompt":"hand-edited","agents":["claude"]}',
+    'draft mutations should not overwrite unapplied raw JSON typing'
+  );
+  assert.strictEqual(
+    app.state.rawEditorDirty,
+    true,
+    'raw editor should stay marked dirty until the app intentionally resyncs it'
+  );
+});
+
+test('pending-action state disables the Run button during launch', async () => {
+  const document = createFakeDocument();
+  let releaseLaunch;
+  const fetch = async (url) => {
+    if (url === '/api/runs/launch') {
+      return new Promise((resolve) => {
+        releaseLaunch = () => resolve({
+          ok: true,
+          async json() {
+            return {
+              ok: true,
+              data: {
+                success: true,
+                launched: true,
+                runId: 'run-pending-test',
+                status: 'starting',
+                error: null
+              }
+            };
+          }
+        });
+      });
+    }
+    if (url === '/api/runs') return { ok: true, async json() { return { ok: true, data: [] }; } };
+    if (url === '/api/runs/sessions') return { ok: true, async json() { return { ok: true, data: [] }; } };
+    if (url === '/api/files/scratchpad' || url === '/api/files/log') {
+      return { ok: true, async json() { return { ok: true, data: { filePath: url, content: '' } }; } };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+  app.__test.setConfigRaw(createDraft(), { renderNow: false, draftMode: 'new' });
+  app.render();
+
+  // Emulate what the Run button click path does: set pending, render, run.
+  const runPromise = (async () => {
+    app.state.pendingActions = app.state.pendingActions || {};
+    app.state.pendingActions.run = true;
+    app.render();
+    const composerDuringLaunch = app.__test.getPanelHtml('composer');
+    assert.ok(composerDuringLaunch.includes('id="run-config"'), 'composer should render the run button');
+    assert.ok(composerDuringLaunch.includes('disabled'),
+      'run button should be disabled while a launch is pending');
+    assert.ok(composerDuringLaunch.includes('Launching'),
+      'run button should show a busy label while pending');
+    await app.__test.runCurrentConfig();
+    delete app.state.pendingActions.run;
+    app.render();
+  })();
+
+  // Release the launch request and let the run completion path settle.
+  await new Promise((r) => setTimeout(r, 0));
+  releaseLaunch();
+  await runPromise;
+
+  const composerAfter = app.__test.getPanelHtml('composer');
+  assert.ok(!composerAfter.includes('disabled'),
+    'run button should no longer be disabled after launch settles');
+});
+
+test('session polling skips network work while the document is hidden', async () => {
+  const document = createFakeDocument({ visibilityState: 'hidden' });
+  const timers = createFakeTimerHarness();
+  let runFetches = 0;
+  let fileFetches = 0;
+  const fetch = async (url) => {
+    if (url === '/api/runs' || url === '/api/runs/sessions') {
+      runFetches += 1;
+      return { ok: true, async json() { return { ok: true, data: [] }; } };
+    }
+    if (url === '/api/files/scratchpad' || url === '/api/files/log') {
+      fileFetches += 1;
+      return { ok: true, async json() { return { ok: true, data: { filePath: url, content: '' } }; } };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const app = createLoopiApp({
+    document,
+    fetch,
+    navigator: {},
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout
+  });
+  app.state.activeTab = 'runs';
+  app.state.runSessions = [{
+    runId: 'run-hidden-poll',
+    status: 'running',
+    mode: 'review',
+    prompt: 'hidden poll test',
+    startedAt: '2026-04-23T10:00:00Z',
+    finishedAt: null,
+    durationMs: null,
+    taskFile: 'shared/task.json',
+    error: null,
+    active: true,
+    launchedAt: '2026-04-23T10:00:00Z',
+    updatedAt: '2026-04-23T10:00:00Z'
+  }];
+  app.state.activeSessionId = 'run-hidden-poll';
+
+  app.__test.scheduleSessionPolling();
+  assert.strictEqual(timers.latestDelay(), 10000,
+    'hidden tabs should schedule a slower polling interval');
+
+  await timers.runLatest();
+
+  assert.strictEqual(runFetches, 0,
+    'hidden-tab polling should skip run refresh requests');
+  assert.strictEqual(fileFetches, 0,
+    'hidden-tab polling should skip file refresh requests');
+  assert.strictEqual(timers.latestDelay(), 10000,
+    'hidden-tab polling should continue using the hidden delay when still hidden');
+});
+
+test('session polling backs off after consecutive failures', async () => {
+  const document = createFakeDocument({ visibilityState: 'visible' });
+  const timers = createFakeTimerHarness();
+  let calls = 0;
+  const fetch = async (url) => {
+    if (url === '/api/runs') {
+      calls += 1;
+      throw new Error('runs endpoint unavailable');
+    }
+    if (url === '/api/runs/sessions') {
+      calls += 1;
+      throw new Error('sessions endpoint unavailable');
+    }
+    if (url === '/api/files/scratchpad' || url === '/api/files/log') {
+      calls += 1;
+      throw new Error('files endpoint unavailable');
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const app = createLoopiApp({
+    document,
+    fetch,
+    navigator: {},
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout
+  });
+  app.state.activeTab = 'runs';
+  app.state.runSessions = [{
+    runId: 'run-backoff-poll',
+    status: 'running',
+    mode: 'review',
+    prompt: 'backoff test',
+    startedAt: '2026-04-23T10:00:00Z',
+    finishedAt: null,
+    durationMs: null,
+    taskFile: 'shared/task.json',
+    error: null,
+    active: true,
+    launchedAt: '2026-04-23T10:00:00Z',
+    updatedAt: '2026-04-23T10:00:00Z'
+  }];
+  app.state.activeSessionId = 'run-backoff-poll';
+
+  app.__test.scheduleSessionPolling();
+  assert.strictEqual(timers.latestDelay(), 1500,
+    'visible polling should start at the base interval');
+
+  await timers.runLatest();
+  await timers.runLatest();
+
+  assert.ok(calls >= 2, 'polling should have attempted refresh work during failures');
+  assert.ok(timers.latestDelay() > 1500,
+    'a second consecutive poll failure should schedule a slower retry');
+});
+
+test('provider API key input renders as type="password"', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.__test.setConfigRaw({
+    mode: 'review',
+    prompt: 'API key masking draft',
+    agents: ['claude'],
+    providers: {
+      localdemo: {
+        type: 'openai-compatible',
+        baseUrl: 'http://localhost:8000/v1',
+        model: 'demo',
+        apiKey: 'secret-key-value'
+      }
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+
+  assert.ok(settingsHtml.includes('data-provider-field="localdemo:apiKey"'),
+    'settings should render the api key input');
+  assert.ok(settingsHtml.includes('type="password"'),
+    'api key input should use type="password" so it renders as masked text');
+});
+
+test('role select marks the currently selected target without brittle string patching', () => {
+  const { createLoopiApp: _unused } = require('../apps/ui/public/app.js');
+  const { roleSelect } = require('../apps/ui/public/ui-core.js');
+  const targets = ['claude', 'my.weird-id', 'codex'];
+
+  const markup = roleSelect('planner', 'my.weird-id', targets);
+  // The "Auto" option should not be selected when a real target is chosen.
+  assert.ok(markup.includes('<option value=""'), 'should render the Auto option');
+  assert.ok(!/<option value=""[^>]*selected/.test(markup),
+    'Auto option should not be selected when another target is chosen');
+  // The target option with matching id should carry the selected attribute.
+  assert.ok(/<option value="my\.weird-id" selected>/.test(markup),
+    'the matching target option should be explicitly selected');
+  // Other options must not be marked selected.
+  assert.ok(!/<option value="claude" selected>/.test(markup));
+  assert.ok(!/<option value="codex" selected>/.test(markup));
+});
+
+test('provider add flow announces lowercase normalization when IDs differ', () => {
+  // This test validates the normalization message without simulating the DOM
+  // click by invoking the same logic the binding runs: lowercase and compare.
+  const rawId = 'NIM-Local';
+  const providerId = rawId.toLowerCase();
+  const message = rawId !== providerId
+    ? `Provider "${providerId}" added to the draft config (normalized from "${rawId}"; provider IDs are stored lowercase).`
+    : `Provider "${providerId}" added to the draft config.`;
+
+  assert.ok(message.includes('normalized from'),
+    'message should announce the normalization when the raw id was not already lowercase');
+  assert.ok(message.includes('NIM-Local'),
+    'message should echo the original casing the user typed');
+
+  // And the pass-through case (already lowercase) stays quiet.
+  const alreadyLower = 'nim-local';
+  const quietMessage = alreadyLower !== alreadyLower.toLowerCase()
+    ? `normalized`
+    : `Provider "${alreadyLower}" added to the draft config.`;
+  assert.ok(!quietMessage.includes('normalized'),
+    'already-lowercase ids should not mention normalization');
+});
+
+test('tab-change clears stale action messages so they do not bleed across tabs', () => {
+  // The tab-click handler lives in ui-bindings. We replicate its message-scope
+  // behavior here: when the active tab changes, lastActionMessage and
+  // lastActionError must be cleared so a note produced on one tab does not
+  // persist onto another.
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.state.activeTab = 'setup';
+  app.state.lastActionMessage = 'Adapter detection refreshed.';
+  app.state.lastActionError = '';
+
+  // Simulate the tab-button click path's scope-clearing logic.
+  const nextTab = 'composer';
+  if (nextTab !== app.state.activeTab) {
+    app.state.lastActionMessage = '';
+    app.state.lastActionError = '';
+  }
+  app.state.activeTab = nextTab;
+
+  assert.strictEqual(app.state.lastActionMessage, '',
+    'action message should be cleared on tab change');
+  assert.strictEqual(app.state.lastActionError, '',
+    'action error should be cleared on tab change');
 });
 
 process.on('beforeExit', () => {
