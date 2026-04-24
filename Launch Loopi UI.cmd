@@ -3,6 +3,11 @@ setlocal
 
 cd /d "%~dp0"
 
+set "LOOPI_UI_SHORTCUT_HELPER=%~dp0scripts\refresh-loopi-ui-shortcut.ps1"
+if exist "%LOOPI_UI_SHORTCUT_HELPER%" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%LOOPI_UI_SHORTCUT_HELPER%" -ProjectRoot "%~dp0" >nul 2>nul
+)
+
 where npm >nul 2>nul
 if errorlevel 1 (
   echo Loopi UI launcher could not find npm on this machine.

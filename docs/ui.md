@@ -24,6 +24,7 @@ Launch Loopi UI.cmd
 ```
 
 That launcher starts the local UI server in a separate console window, waits for the control plane to answer on `http://127.0.0.1:4311/api/bootstrap`, and then opens the browser automatically.
+When you launch it, it also refreshes a sibling `Launch Loopi UI.lnk` shortcut with the branded Loopi icon so Windows can show a custom launcher icon in Explorer, on the desktop, or when pinned.
 
 By default, the server binds to `127.0.0.1:4311`.
 
