@@ -1,7 +1,5 @@
-// Claude model values are pending verification of exact --model CLI tokens.
-// passThrough: true means unrecognized model strings are passed through to the
-// CLI with an unverified_model_value warning, rather than blocked entirely.
-// This avoids false validation failures while the real CLI tokens are confirmed.
+// Claude Code's /model picker is discovered from the installed CLI bundle at
+// runtime, so Loopi follows CLI updates instead of carrying a model list here.
 module.exports = {
   agent: 'claude',
   selection: {
@@ -9,15 +7,17 @@ module.exports = {
       mode: 'startup_flag',
       flag: '--model',
       passThrough: true,
-      values: {
-        sonnet: { cliValue: 'sonnet', efforts: ['low', 'medium', 'high'] },
-        opus: { cliValue: 'opus', efforts: ['low', 'medium', 'high', 'max'] },
-        haiku: { cliValue: 'haiku', efforts: [] }
-      },
-      defaultValue: 'sonnet'
+      defaultSentinelValues: ['default'],
+      defaultOptionMode: 'discovered',
+      discovery: {
+        type: 'claude-bundle-model-options'
+      }
     },
     effort: {
-      mode: 'model_dependent'
+      mode: 'separate_flag',
+      label: 'Effort',
+      flag: '--effort',
+      values: ['low', 'medium', 'high', 'max']
     }
   },
   writeMode: {

@@ -1310,6 +1310,577 @@ test('provider API key input renders as type="password"', () => {
     'api key input should use type="password" so it renders as masked text');
 });
 
+test('settings panel includes hover help for key shared-workflow controls', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.__test.setConfigRaw(createDraft(), { renderNow: false, draftMode: 'new' });
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+
+  assert.ok(settingsHtml.includes('The active project folder for this Loopi session.'),
+    'Project Root should include explanatory help text');
+  assert.ok(settingsHtml.includes('The folder of reference material Loopi can pull into planning, implementation, and review.'),
+    'Context Directory should include explanatory help text');
+  assert.ok(settingsHtml.includes('Turns prepared context on for this task.'),
+    'Use shared context folder should include explanatory help text');
+  assert.ok(settingsHtml.includes('Keeps a workflow moving after a failed step when possible'),
+    'Continue on error should include explanatory help text');
+  assert.ok(settingsHtml.includes('Writes the legacy shared/scratchpad.txt summary during runs'),
+    'Write scratchpad should include explanatory help text');
+  assert.ok(settingsHtml.includes('setting-hint__bubble'),
+    'settings help should render with tooltip bubble markup');
+});
+
+test('settings panel includes hover help for timeout and advanced context caps', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.state.advanced = true;
+  app.__test.setConfigRaw(createDraft(), { renderNow: false, draftMode: 'new' });
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+
+  assert.ok(settingsHtml.includes('How long Loopi will wait before treating a step as timed out.'),
+    'Timeout should include explanatory help text');
+  assert.ok(settingsHtml.includes('Caps how many prepared context files or excerpts can be included during planning.'),
+    'Plan Max Files should include explanatory help text');
+  assert.ok(settingsHtml.includes('Caps how many context files or excerpts implementation steps can receive.'),
+    'Implement Max Files should include explanatory help text');
+  assert.ok(settingsHtml.includes('Caps how many context files or excerpts reviewers can see.'),
+    'Review Max Files should include explanatory help text');
+  assert.ok(settingsHtml.includes('Caps the total context characters available to planning prompts after selection and truncation.'),
+    'Plan Max Chars should include explanatory help text');
+  assert.ok(settingsHtml.includes('Caps the total context characters implementation steps can receive.'),
+    'Implement Max Chars should include explanatory help text');
+  assert.ok(settingsHtml.includes('Caps the total context characters available during review.'),
+    'Review Max Chars should include explanatory help text');
+});
+
+test('agent settings default selected agents to can write and omit capability badges', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.state.bootstrap = {
+    adapterMetadata: [
+      { id: 'claude', displayName: 'Claude', supportsWriteAccess: true },
+      { id: 'gemini', displayName: 'Gemini', supportsWriteAccess: false }
+    ]
+  };
+
+  app.__test.setConfigRaw({
+    mode: 'plan',
+    prompt: 'Agent policy defaults',
+    agents: ['claude', 'gemini'],
+    settings: {
+      planLoops: 1,
+      qualityLoops: 1,
+      implementLoops: 1,
+      sectionImplementLoops: 1,
+      timeoutMs: 180000,
+      continueOnError: false,
+      writeScratchpad: true
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+
+  assert.ok(settingsHtml.includes('data-agent-policy="claude"'),
+    'selected agents should render a Can Write selector');
+  assert.ok(settingsHtml.includes('data-agent-policy="gemini"'),
+    'every selected agent should render a Can Write selector');
+  assert.ok(!settingsHtml.includes('>Writable<'),
+    'Agent Enablement should not show the old Writable badge');
+  assert.ok(!settingsHtml.includes('>Read-only<'),
+    'Agent Enablement should not show the old Read-only badge');
+  assert.ok(/data-agent-policy="claude"[\s\S]*?<option value="true" selected>Yes<\/option>/.test(settingsHtml),
+    'selected agents should default to Can Write = Yes');
+  assert.ok(/data-agent-policy="gemini"[\s\S]*?<option value="true" selected>Yes<\/option>/.test(settingsHtml),
+    'all selected agents should default to Can Write = Yes');
+  assert.ok(!/data-agent-policy="claude"[^>]*>[\s\S]*?<\/select>/.exec(settingsHtml)[0].includes('>Default</option>'),
+    'Can Write selector should no longer expose a Default option');
+  assert.deepStrictEqual(app.state.configRaw.settings.agentPolicies.claude, { canWrite: true });
+  assert.deepStrictEqual(app.state.configRaw.settings.agentPolicies.gemini, { canWrite: true });
+});
+
+test('agent defaults render adapter-specific model and option controls', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.state.bootstrap = {
+    adapterMetadata: [
+      { id: 'kilo', displayName: 'Kilo', supportsWriteAccess: true }
+    ],
+    adapterOptions: [
+      {
+        agentId: 'kilo',
+        displayName: 'Kilo',
+        schema: {
+          agentId: 'kilo',
+          options: {
+            model: {
+              key: 'model',
+              label: 'Model',
+              mode: 'startup_flag',
+              kind: 'open',
+              flag: '--model',
+              allowCustom: true,
+              values: [
+                { value: 'Kilo Auto Frontier', label: 'Kilo Auto Frontier', efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] },
+                { value: 'Kilo Auto Balanced', label: 'Kilo Auto Balanced', efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] },
+                { value: 'Kilo Auto Free', label: 'Kilo Auto Free', efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] }
+              ],
+              discovery: { type: 'cli', command: 'models', verbose: true }
+            },
+            effort: {
+              key: 'effort',
+              label: 'Effort',
+              mode: 'model_dependent',
+              kind: 'open',
+              flag: '--variant',
+              values: []
+            },
+            agent: {
+              key: 'agent',
+              label: 'Agent Mode',
+              mode: 'startup_flag',
+              kind: 'open',
+              flag: '--agent',
+              allowCustom: true,
+              values: [
+                { value: 'code', label: 'code' },
+                { value: 'ask', label: 'ask' },
+                { value: 'debug', label: 'debug' },
+                { value: 'plan', label: 'plan' }
+              ]
+            },
+            thinking: {
+              key: 'thinking',
+              label: 'Thinking',
+              mode: 'boolean_flag',
+              kind: 'boolean',
+              flag: '--thinking',
+              modelDependent: true,
+              values: []
+            }
+          }
+        }
+      }
+    ]
+  };
+  app.state.adapterDiscovery = {
+    kilo: {
+      agentId: 'kilo',
+      status: 'ready',
+      options: {
+        model: {
+          status: 'ready',
+          values: [
+            { id: 'anthropic/claude-sonnet-4-6', label: 'anthropic/claude-sonnet-4-6', efforts: ['high', 'max'], supportsThinking: false }
+          ]
+        }
+      }
+    }
+  };
+
+  app.__test.setConfigRaw({
+    mode: 'plan',
+    prompt: 'Adapter options',
+    agents: ['kilo'],
+    settings: {
+      agentOptions: {
+        kilo: {
+          model: 'anthropic/claude-sonnet-4-6',
+          agent: 'plan',
+          effort: 'high',
+          thinking: true
+        }
+      }
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+
+  assert.ok(settingsHtml.includes('data-agent-option="kilo:model"'),
+    'model control should expose discovered values through an editable control');
+  assert.ok(settingsHtml.includes('<select data-agent-option="kilo:model"'),
+    'discovered model values should render as a dropdown');
+  assert.ok(settingsHtml.includes('anthropic/claude-sonnet-4-6'),
+    'discovered model should be rendered as a selectable value');
+  assert.ok(settingsHtml.includes('Kilo Auto Frontier'),
+    'Kilo Auto Frontier should be included as a built-in model option');
+  assert.ok(settingsHtml.includes('Kilo Auto Balanced'),
+    'Kilo Auto Balanced should be included as a built-in model option');
+  assert.ok(settingsHtml.includes('Kilo Auto Free'),
+    'Kilo Auto Free should be included as a built-in model option');
+  assert.ok(/data-agent-option="kilo:effort"[\s\S]*?<option value="max"/.test(settingsHtml),
+    'Kilo effort should be populated from the selected model variants');
+  assert.ok(settingsHtml.includes('<select data-agent-option="kilo:agent"'),
+    'adapter-specific agent mode option should render as a dropdown');
+  assert.ok(!settingsHtml.includes('<select data-agent-option="kilo:variant"'),
+    'Kilo variant should not render separately because effort maps to --variant');
+  assert.ok(settingsHtml.includes('data-agent-option="kilo:thinking"'),
+    'thinking option should still render for Kilo');
+  const thinkingSelect = /<select data-agent-option="kilo:thinking"[\s\S]*?<\/select>/.exec(settingsHtml);
+  assert.ok(thinkingSelect && thinkingSelect[0].includes('disabled'),
+    'Kilo thinking should be disabled when the selected model uses effort variants instead');
+  assert.ok(settingsHtml.includes('id="refresh-adapter-options"'),
+    'settings should expose a model-list refresh action');
+});
+
+test('kilo thinking control enables when selected model supports thinking but no effort variants', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.state.bootstrap = {
+    adapterMetadata: [
+      { id: 'kilo', displayName: 'Kilo', supportsWriteAccess: true }
+    ],
+    adapterOptions: [
+      {
+        agentId: 'kilo',
+        displayName: 'Kilo',
+        schema: {
+          agentId: 'kilo',
+          options: {
+            model: {
+              key: 'model',
+              label: 'Model',
+              mode: 'startup_flag',
+              kind: 'open',
+              flag: '--model',
+              allowCustom: true,
+              values: []
+            },
+            effort: {
+              key: 'effort',
+              label: 'Effort',
+              mode: 'model_dependent',
+              kind: 'open',
+              flag: '--variant',
+              values: []
+            },
+            thinking: {
+              key: 'thinking',
+              label: 'Thinking',
+              mode: 'boolean_flag',
+              kind: 'boolean',
+              flag: '--thinking',
+              modelDependent: true,
+              values: []
+            }
+          }
+        }
+      }
+    ]
+  };
+  app.state.adapterDiscovery = {
+    kilo: {
+      agentId: 'kilo',
+      status: 'ready',
+      options: {
+        model: {
+          status: 'ready',
+          values: [
+            { id: 'anthropic/claude-haiku-4.5', label: 'Claude Haiku 4.5', efforts: [], supportsThinking: true }
+          ]
+        }
+      }
+    }
+  };
+
+  app.__test.setConfigRaw({
+    mode: 'plan',
+    prompt: 'Adapter options',
+    agents: ['kilo'],
+    settings: {
+      agentOptions: {
+        kilo: {
+          model: 'anthropic/claude-haiku-4.5',
+          thinking: true
+        }
+      }
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+  const effortSelect = /<select data-agent-option="kilo:effort"[\s\S]*?<\/select>/.exec(settingsHtml);
+  const thinkingSelect = /<select data-agent-option="kilo:thinking"[\s\S]*?<\/select>/.exec(settingsHtml);
+
+  assert.ok(effortSelect && effortSelect[0].includes('Unsupported'),
+    'Kilo effort should be disabled when selected model exposes no effort variants');
+  assert.ok(thinkingSelect && !thinkingSelect[0].includes('disabled'),
+    'Kilo thinking should be enabled when selected model supports a thinking toggle');
+  assert.ok(thinkingSelect[0].includes('<option value="true" selected>On</option>'),
+    'Kilo thinking On state should be selectable and selected');
+});
+
+test('kilo thinking control disables when selected model does not support thinking', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.state.bootstrap = {
+    adapterMetadata: [
+      { id: 'kilo', displayName: 'Kilo', supportsWriteAccess: true }
+    ],
+    adapterOptions: [
+      {
+        agentId: 'kilo',
+        displayName: 'Kilo',
+        schema: {
+          agentId: 'kilo',
+          options: {
+            model: {
+              key: 'model',
+              label: 'Model',
+              mode: 'startup_flag',
+              kind: 'open',
+              flag: '--model',
+              allowCustom: true,
+              values: [
+                { value: 'provider/plain-model', label: 'provider/plain-model', efforts: [], supportsThinking: false }
+              ]
+            },
+            effort: {
+              key: 'effort',
+              label: 'Effort',
+              mode: 'model_dependent',
+              kind: 'open',
+              flag: '--variant',
+              values: []
+            },
+            thinking: {
+              key: 'thinking',
+              label: 'Thinking',
+              mode: 'boolean_flag',
+              kind: 'boolean',
+              flag: '--thinking',
+              modelDependent: true,
+              values: []
+            }
+          }
+        }
+      }
+    ]
+  };
+
+  app.__test.setConfigRaw({
+    mode: 'plan',
+    prompt: 'Adapter options',
+    agents: ['kilo'],
+    settings: {
+      agentOptions: {
+        kilo: {
+          model: 'provider/plain-model',
+          thinking: true
+        }
+      }
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+  const thinkingSelect = /<select data-agent-option="kilo:thinking"[\s\S]*?<\/select>/.exec(settingsHtml);
+
+  assert.ok(thinkingSelect, 'Kilo thinking select should render');
+  assert.ok(/disabled[\s\S]*?>Unsupported<\/option>/.test(thinkingSelect[0]),
+    'Kilo thinking should be disabled for models that do not support thinking');
+  assert.ok(!thinkingSelect[0].includes('<option value="true"'),
+    'unsupported thinking control should not offer an On option');
+});
+
+test('codex discovered local models render as a model dropdown', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.state.bootstrap = {
+    adapterMetadata: [
+      { id: 'codex', displayName: 'Codex', supportsWriteAccess: true }
+    ],
+    adapterOptions: [
+      {
+        agentId: 'codex',
+        displayName: 'Codex',
+        schema: {
+          agentId: 'codex',
+          options: {
+            model: {
+              key: 'model',
+              label: 'Model',
+              mode: 'startup_flag',
+              kind: 'open',
+              flag: '--model',
+              allowCustom: true,
+              values: [],
+              discovery: { type: 'codex-config' }
+            },
+            effort: {
+              key: 'effort',
+              label: 'Effort',
+              mode: 'separate_flag',
+              kind: 'enum',
+              flag: '-c',
+              configKey: 'model_reasoning_effort',
+              values: [
+                { value: 'none', label: 'none' },
+                { value: 'minimal', label: 'minimal' },
+                { value: 'low', label: 'low' },
+                { value: 'medium', label: 'medium' },
+                { value: 'high', label: 'high' },
+                { value: 'xhigh', label: 'xhigh' }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  };
+  app.state.adapterDiscovery = {
+    codex: {
+      agentId: 'codex',
+      status: 'ready',
+      options: {
+        model: {
+          status: 'ready',
+          values: [
+            { id: 'gpt-5.5', label: 'gpt-5.5 (local default)' },
+            { id: 'gpt-5.4', label: 'gpt-5.4' }
+          ]
+        }
+      }
+    }
+  };
+
+  app.__test.setConfigRaw({
+    mode: 'plan',
+    prompt: 'Codex options',
+    agents: ['codex'],
+    settings: {
+      agentOptions: {
+        codex: {
+          model: 'gpt-5.5'
+        }
+      }
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+
+  assert.ok(settingsHtml.includes('<select data-agent-option="codex:model"'),
+    'codex discovered model values should render as a dropdown');
+  assert.ok(settingsHtml.includes('gpt-5.5 (local default)'),
+    'codex local config model should be visible in the dropdown');
+  assert.ok(!settingsHtml.includes('[object Object]'),
+    'codex effort dropdown should render string labels, not object coercions');
+});
+
+test('claude effort dropdown follows the CLI effort enum', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.state.bootstrap = {
+    adapterMetadata: [
+      { id: 'claude', displayName: 'Claude', supportsWriteAccess: true }
+    ],
+    adapterOptions: [
+      {
+        agentId: 'claude',
+        displayName: 'Claude',
+        schema: {
+          agentId: 'claude',
+          options: {
+            model: {
+              key: 'model',
+              label: 'Model',
+              mode: 'startup_flag',
+              kind: 'open',
+              flag: '--model',
+              allowCustom: true,
+              defaultSentinelValues: ['default'],
+              defaultOptionMode: 'discovered',
+              discovery: { type: 'claude-bundle-model-options' },
+              values: []
+            },
+            effort: {
+              key: 'effort',
+              label: 'Effort',
+              mode: 'separate_flag',
+              kind: 'enum',
+              flag: '--effort',
+              values: [
+                { value: 'low', label: 'low' },
+                { value: 'medium', label: 'medium' },
+                { value: 'high', label: 'high' },
+                { value: 'max', label: 'max' }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  };
+  app.state.adapterDiscovery = {
+    claude: {
+      agentId: 'claude',
+      status: 'ready',
+      options: {
+        model: {
+          status: 'ready',
+          defaultOption: { label: 'Default' },
+          values: [
+            { value: 'sonnet', label: 'Sonnet' },
+            { value: 'opus', label: 'Opus' },
+            { value: 'haiku', label: 'Haiku' }
+          ]
+        }
+      }
+    }
+  };
+
+  app.__test.setConfigRaw({
+    mode: 'plan',
+    prompt: 'Claude options',
+    agents: ['claude'],
+    settings: {
+      agentOptions: {
+        claude: {
+          model: 'opus'
+        }
+      }
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  app.render();
+  let settingsHtml = app.__test.getPanelHtml('settings');
+  assert.ok(settingsHtml.includes('<select data-agent-option="claude:model"'),
+    'Claude model should render as a dropdown when the CLI bundle exposes options');
+  assert.ok(/<select data-agent-option="claude:model"[\s\S]*?<option value=""[^>]*>Default<\/option>/.test(settingsHtml),
+    'Claude model should include Default when discovered from the CLI bundle');
+  assert.ok(/<select data-agent-option="claude:model"[\s\S]*?<option value="haiku"/.test(settingsHtml),
+    'Claude model should include Haiku when discovered from the CLI bundle');
+  assert.ok(/data-agent-option="claude:effort"[\s\S]*?<option value="max"/.test(settingsHtml),
+    'Claude should expose the max effort from the CLI enum');
+
+  app.__test.mutateDraft((draft) => {
+    draft.settings.agentOptions.claude.model = 'claude-haiku-4-5';
+  }, { renderNow: true });
+  settingsHtml = app.__test.getPanelHtml('settings');
+  assert.ok(!/data-agent-option="claude:effort" disabled/.test(settingsHtml),
+    'Claude effort stays enabled for custom model names because the CLI exposes effort as a session flag');
+});
+
 test('role select marks the currently selected target without brittle string patching', () => {
   const { createLoopiApp: _unused } = require('../apps/ui/public/app.js');
   const { roleSelect } = require('../apps/ui/public/ui-core.js');

@@ -53,6 +53,22 @@
       state.setupStatus = await api('/api/setup/status');
     }
 
+    async function refreshAdapterOptions({ refresh = false } = {}) {
+      const agents = state.configRaw && Array.isArray(state.configRaw.agents)
+        ? state.configRaw.agents
+        : [];
+      const hasOptionSchemas = state.bootstrap && Array.isArray(state.bootstrap.adapterOptions);
+      if (agents.length === 0 || !hasOptionSchemas) {
+        state.adapterDiscovery = {};
+        return;
+      }
+      state.adapterDiscovery = await api('/api/adapters/options/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agents, refresh })
+      });
+    }
+
     async function runAdapterInstall(agentId) {
       const result = await api(`/api/setup/adapters/${encodeURIComponent(agentId)}/install`, {
         method: 'POST',
@@ -428,6 +444,7 @@
 
       const refreshers = [
         { name: 'setup', fn: refreshSetup },
+        { name: 'adapter-options', fn: refreshAdapterOptions },
         { name: 'providers', fn: refreshProviderStatus },
         { name: 'runs', fn: refreshRuns },
         { name: 'files', fn: refreshFiles },
@@ -472,6 +489,7 @@
       refreshSetup,
       runAdapterInstall,
       runAdapterLogin,
+      refreshAdapterOptions,
       refreshProviderStatus,
       refreshConfig,
       refreshRuns,

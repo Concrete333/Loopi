@@ -127,6 +127,7 @@ async function buildBootstrap(service) {
     projectRoot: service.projectRoot,
     useCases: service.listUseCases(),
     adapterMetadata: service.getAllAdapterMetadata(),
+    adapterOptions: service.getAllAdapterOptionMetadata(),
     paths: {
       taskFile: taskPaths.legacyTaskFile(service.projectRoot),
       scratchpadFile: taskPaths.legacyScratchpadFile(service.projectRoot),
@@ -191,6 +192,25 @@ async function handleApiRequest(req, res, url, service) {
 
   if (req.method === 'GET' && pathname === '/api/setup/metadata') {
     sendJson(res, 200, { ok: true, data: service.getAllAdapterMetadata() });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/adapters/options') {
+    sendJson(res, 200, { ok: true, data: service.getAllAdapterOptionMetadata() });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/adapters/options/discover') {
+    const body = await readJsonBody(req);
+    const agentIds = Array.isArray(body.agents)
+      ? body.agents.map((agent) => String(agent || '').trim().toLowerCase()).filter(Boolean)
+      : [];
+    sendJson(res, 200, {
+      ok: true,
+      data: await service.discoverAdapterOptions(agentIds, {
+        refresh: body.refresh === true
+      })
+    });
     return;
   }
 

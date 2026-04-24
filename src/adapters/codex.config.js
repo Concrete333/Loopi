@@ -5,12 +5,17 @@ module.exports = {
       mode: 'startup_flag',
       flag: '--model',
       values: 'open',
+      discovery: {
+        type: 'codex-config'
+      },
       defaultValue: null
     },
     effort: {
       mode: 'separate_flag',
-      flag: '--reasoning-effort',
-      values: ['low', 'medium', 'high']
+      label: 'Effort',
+      flag: '-c',
+      configKey: 'model_reasoning_effort',
+      values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
     }
   },
   writeMode: {

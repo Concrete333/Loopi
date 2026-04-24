@@ -40,6 +40,151 @@ async function testGetAllAdapterMetadata() {
   assert.ok(ids.includes('opencode'));
 }
 
+async function testGetAllAdapterOptionMetadata() {
+  const { getAllAdapterOptionMetadata } = require('../src/setup-service');
+
+  const allOptions = getAllAdapterOptionMetadata();
+  const claudeOptions = allOptions.find((entry) => entry.agentId === 'claude');
+  assert.ok(claudeOptions, 'claude option metadata exists');
+  assert.deepStrictEqual(claudeOptions.schema.options.model.values, [],
+    'claude model values are discovered from the installed CLI instead of hardcoded');
+  assert.strictEqual(claudeOptions.schema.options.model.defaultValue, null,
+    'claude should not invent a configured default model value');
+  assert.deepStrictEqual(claudeOptions.schema.options.model.defaultSentinelValues, ['default']);
+  assert.strictEqual(claudeOptions.schema.options.model.defaultOptionMode, 'discovered');
+  assert.strictEqual(claudeOptions.schema.options.model.discovery.type, 'claude-bundle-model-options');
+  assert.deepStrictEqual(claudeOptions.schema.options.effort.values.map((entry) => entry.value), [
+    'low',
+    'medium',
+    'high',
+    'max'
+  ]);
+
+  const kiloOptions = allOptions.find((entry) => entry.agentId === 'kilo');
+  assert.ok(kiloOptions, 'kilo option metadata exists');
+  assert.ok(kiloOptions.schema.options.model.values.some((entry) => entry.value === 'Kilo Auto Frontier'));
+  assert.ok(kiloOptions.schema.options.model.values.some((entry) => entry.value === 'Kilo Auto Balanced'));
+  assert.ok(kiloOptions.schema.options.model.values.some((entry) => entry.value === 'Kilo Auto Free'));
+  assert.strictEqual(kiloOptions.schema.options.model.discovery.command, 'models');
+  assert.strictEqual(kiloOptions.schema.options.model.discovery.verbose, true);
+  assert.strictEqual(kiloOptions.schema.options.effort.flag, '--variant');
+  assert.strictEqual(kiloOptions.schema.options.effort.mode, 'model_dependent');
+  assert.strictEqual(kiloOptions.schema.options.agent.flag, '--agent');
+  assert.ok(kiloOptions.schema.options.agent.values.some((entry) => entry.value === 'plan'));
+  assert.strictEqual(kiloOptions.schema.options.thinking.kind, 'boolean');
+  assert.strictEqual(kiloOptions.schema.options.thinking.modelDependent, true);
+  assert.ok(!kiloOptions.schema.options.variant, 'Kilo variant should be represented as semantic effort only');
+
+  const codexOptions = allOptions.find((entry) => entry.agentId === 'codex');
+  assert.strictEqual(codexOptions.schema.options.effort.flag, '-c');
+  assert.strictEqual(codexOptions.schema.options.effort.configKey, 'model_reasoning_effort');
+  assert.deepStrictEqual(codexOptions.schema.options.effort.values.map((entry) => entry.value), [
+    'none',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh'
+  ]);
+}
+
+async function testParseClaudeBundleModelOptions() {
+  const { __test } = require('../src/setup-service');
+
+  const discovery = __test.parseClaudeBundleModelOptions([
+    'function on8(){return{value:null,label:"Default (recommended)"}}',
+    'model:{getOptions:()=>{try{return j4H().filter((H)=>H.value!==null).map((H)=>H.value)}catch{return["alpha","beta","gamma"]}},formatOnRead:(H)=>H===null?"default":H}',
+    'function a(){return{value:"alpha",label:"Alpha Model"}}',
+    'function b(){return{value:"beta",label:"Beta Model"}}'
+  ].join('\n'));
+
+  assert.deepStrictEqual(discovery.values.map((entry) => entry.value), ['alpha', 'beta', 'gamma']);
+  assert.deepStrictEqual(discovery.values.map((entry) => entry.label), ['Alpha Model', 'Beta Model', 'Gamma']);
+  assert.deepStrictEqual(discovery.defaultOption, { label: 'Default' });
+}
+
+async function testDiscoverAdapterOptionsFallsBackToWindowsCommandShim() {
+  const { discoverAdapterOptions } = require('../src/setup-service');
+
+  const calls = [];
+  const result = await discoverAdapterOptions('kilo', {
+    commandRunner: async (invocation) => {
+      calls.push(invocation.command);
+      if (process.platform === 'win32' && calls.length === 1) {
+        throw new Error('spawn EPERM');
+      }
+      return {
+        exitCode: 0,
+        stdout: 'google/gemini-2.5-pro\nanthropic/claude-sonnet-4-6\n',
+        stderr: ''
+      };
+    }
+  });
+
+  assert.strictEqual(result.options.model.status, 'ready');
+  assert.deepStrictEqual(result.options.model.values.map((entry) => entry.id), [
+    'google/gemini-2.5-pro',
+    'anthropic/claude-sonnet-4-6'
+  ]);
+  assert.strictEqual(result.options.model.values[0].supportsThinking, false);
+  if (process.platform === 'win32') {
+    assert.ok(calls.some((command) => command === 'kilo.cmd'),
+      'Windows discovery should fall back to the command shim when the resolved binary fails');
+  }
+}
+
+async function testParseCliModelList() {
+  const { __test } = require('../src/setup-service');
+
+  const models = __test.parseCliModelList([
+    'anthropic/claude-sonnet-4-6  Claude Sonnet',
+    'openai/gpt-5.4',
+    'google/gemini-2.5-pro',
+    '{',
+    '  "id": "gemini-2.5-pro",',
+    '  "providerID": "google",',
+    '  "name": "Gemini 2.5 Pro",',
+    '  "variants": {',
+    '    "high": { "thinkingConfig": { "includeThoughts": true } },',
+    '    "max": { "thinkingConfig": { "includeThoughts": true } }',
+    '  }',
+    '}',
+    'https://example.test/not-a-model'
+  ].join('\n'));
+  assert.ok(models.some((model) => model.id === 'anthropic/claude-sonnet-4-6'));
+  assert.ok(models.some((model) => model.id === 'openai/gpt-5.4'));
+  const gemini = models.find((model) => model.id === 'google/gemini-2.5-pro');
+  assert.ok(gemini, 'verbose Kilo model entry should be parsed');
+  assert.deepStrictEqual(gemini.efforts, ['high', 'max']);
+  assert.strictEqual(gemini.supportsThinking, false);
+  assert.strictEqual(gemini.label, 'google/gemini-2.5-pro (Gemini 2.5 Pro)');
+}
+
+async function testParseCliModelListTreatsReasoningWithoutEffortAsThinkingToggle() {
+  const { __test } = require('../src/setup-service');
+
+  const models = __test.parseCliModelList([
+    'anthropic/claude-haiku-4.5',
+    '{',
+    '  "id": "claude-haiku-4.5",',
+    '  "providerID": "anthropic",',
+    '  "name": "Claude Haiku 4.5",',
+    '  "capabilities": {',
+    '    "reasoning": true',
+    '  },',
+    '  "variants": {',
+    '    "thinking": { "reasoning": { "enabled": true } },',
+    '    "default": {}',
+    '  }',
+    '}'
+  ].join('\n'));
+
+  const haiku = models.find((model) => model.id === 'anthropic/claude-haiku-4.5');
+  assert.ok(haiku, 'verbose Kilo Claude Haiku entry should be parsed');
+  assert.deepStrictEqual(haiku.efforts, []);
+  assert.strictEqual(haiku.supportsThinking, true);
+}
+
 async function testGetSupportedAgentIds() {
   const { getSupportedAgentIds } = require('../src/setup-service');
 
@@ -374,6 +519,21 @@ async function main() {
 
   await testGetAllAdapterMetadata();
   console.log('  [PASS] getAllAdapterMetadata returns all adapters');
+
+  await testGetAllAdapterOptionMetadata();
+  console.log('  [PASS] getAllAdapterOptionMetadata returns adapter option schemas');
+
+  await testParseClaudeBundleModelOptions();
+  console.log('  [PASS] parseClaudeBundleModelOptions extracts local CLI model options');
+
+  await testDiscoverAdapterOptionsFallsBackToWindowsCommandShim();
+  console.log('  [PASS] discoverAdapterOptions falls back to Windows command shims for model discovery');
+
+  await testParseCliModelList();
+  console.log('  [PASS] parseCliModelList extracts provider/model IDs');
+
+  await testParseCliModelListTreatsReasoningWithoutEffortAsThinkingToggle();
+  console.log('  [PASS] parseCliModelList treats reasoning-without-effort models as thinking toggles');
 
   await testGetSupportedAgentIds();
   console.log('  [PASS] getSupportedAgentIds returns supported agent IDs');

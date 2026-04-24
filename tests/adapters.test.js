@@ -3,7 +3,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const { __test: adapterTest, clearAuthCache, resolveModelArgs, resolveEffortArgs } = require('../src/adapters');
+const { __test: adapterTest, clearAuthCache, resolveModelArgs, resolveEffortArgs, resolveExtraOptionArgs } = require('../src/adapters');
 const { resolveWriteModeArgs } = require('../src/adapters');
 
 function buildResolvedOptions(agent, baseOptions) {
@@ -13,9 +13,11 @@ function buildResolvedOptions(agent, baseOptions) {
     ...baseOptions,
     resolvedModelArgs: model != null ? resolveModelArgs(agent, model) : { args: [], warnings: [] },
     resolvedEffortArgs: effort != null ? resolveEffortArgs(agent, model, effort) : { args: [], warnings: [] },
+    resolvedExtraOptionArgs: resolveExtraOptionArgs(agent, baseOptions.agentOptions || {}),
     warnings: [
       ...(model != null ? resolveModelArgs(agent, model).warnings : []),
-      ...(effort != null ? resolveEffortArgs(agent, model, effort).warnings : [])
+      ...(effort != null ? resolveEffortArgs(agent, model, effort).warnings : []),
+      ...resolveExtraOptionArgs(agent, baseOptions.agentOptions || {}).warnings
     ]
   };
 }
@@ -247,7 +249,7 @@ function testCodexPreflightInvocationTargetsExecHelp() {
   ]);
 }
 
-function testKiloPrimaryInvocationUsesRunAutoDir() {
+function testKiloPrimaryInvocationUsesRunDir() {
   const invocation = adapterTest.buildKiloPrimaryInvocation('kilo.exe', {
     cwd: 'C:\\repo',
     timeoutMs: 1000,
@@ -256,10 +258,26 @@ function testKiloPrimaryInvocationUsesRunAutoDir() {
 
   assert.deepEqual(invocation.args, [
     'run',
-    '--auto',
     '--dir',
     'C:\\repo',
     'Review the repo'
+  ]);
+}
+
+function testKiloPrimaryInvocationEnablesAutoWhenCanWrite() {
+  const invocation = adapterTest.buildKiloPrimaryInvocation('kilo.exe', {
+    cwd: 'C:\\repo',
+    timeoutMs: 1000,
+    prompt: 'Implement this',
+    canWrite: true
+  });
+
+  assert.deepEqual(invocation.args, [
+    'run',
+    '--auto',
+    '--dir',
+    'C:\\repo',
+    'Implement this'
   ]);
 }
 
@@ -1107,9 +1125,9 @@ function testCodexPrimaryInvocationWithEffort() {
   });
   const invocation = adapterTest.buildCodexPrimaryInvocation('C:\\codex.js', opts);
 
-  assert.ok(invocation.args.includes('--reasoning-effort'), 'includes --reasoning-effort flag');
-  const effortIdx = invocation.args.indexOf('--reasoning-effort');
-  assert.equal(invocation.args[effortIdx + 1], 'high', 'effort value is high');
+  assert.ok(invocation.args.includes('-c'), 'includes Codex config override flag');
+  const effortIdx = invocation.args.indexOf('-c');
+  assert.equal(invocation.args[effortIdx + 1], 'model_reasoning_effort="high"', 'effort value is high');
 }
 
 function testCodexPrimaryInvocationWithModelAndEffort() {
@@ -1124,7 +1142,7 @@ function testCodexPrimaryInvocationWithModelAndEffort() {
   const invocation = adapterTest.buildCodexPrimaryInvocation('C:\\codex.js', opts);
 
   assert.ok(invocation.args.includes('--model'), 'includes --model flag');
-  assert.ok(invocation.args.includes('--reasoning-effort'), 'includes --reasoning-effort flag');
+  assert.ok(invocation.args.includes('-c'), 'includes Codex config override flag');
   assert.deepEqual(invocation.warnings, [], 'valid model and effort produce no warnings');
 }
 
@@ -1140,7 +1158,7 @@ function testCodexSafeFallbackWithModel() {
   const invocation = adapterTest.buildCodexSafeFallbackInvocation('C:\\codex.js', opts);
 
   assert.ok(invocation.args.includes('--model'), 'safe fallback includes --model');
-  assert.ok(invocation.args.includes('--reasoning-effort'), 'safe fallback includes --reasoning-effort');
+  assert.ok(invocation.args.includes('-c'), 'safe fallback includes Codex config override flag');
   assert.deepEqual(invocation.warnings, [], 'safe fallback passes through resolved args without adding warnings');
 }
 
@@ -1150,11 +1168,11 @@ function testCodexPrimaryInvocationWithUnknownEffort() {
     timeoutMs: 1000,
     prompt: 'Implement it',
     canWrite: false,
-    effort: 'max'
+    effort: 'auto'
   });
   const invocation = adapterTest.buildCodexPrimaryInvocation('C:\\codex.js', opts);
 
-  assert.ok(!invocation.args.includes('--reasoning-effort'), 'unknown effort not passed to CLI');
+  assert.ok(!invocation.args.includes('-c'), 'unknown effort not passed to CLI');
   assert.ok(invocation.warnings.includes('unknown_effort_value'), 'warning present for unknown effort');
 }
 
@@ -1168,8 +1186,8 @@ function testClaudePrimaryInvocationReportsEffortWarning() {
   });
   const invocation = adapterTest.buildClaudePrimaryInvocation('claude.exe', opts);
 
-  assert.ok(invocation.warnings.includes('effort_not_automatable'),
-    'Claude effort produces effort_not_automatable warning on invocation');
+  assert.ok(invocation.args.includes('--effort'),
+    'Claude effort is passed through with the CLI effort flag');
 }
 
 function testResolveModelArgsCodexOpen() {
@@ -1184,31 +1202,46 @@ function testResolveModelArgsCodexOpen() {
   assert.deepEqual(nullResult.warnings, []);
 }
 
-function testResolveModelArgsFixedAdapter() {
+function testResolveModelArgsKiloOpen() {
   const { resolveModelArgs } = require('../src/adapters');
 
   const nullResult = resolveModelArgs('kilo', null);
   assert.deepEqual(nullResult.args, []);
   assert.deepEqual(nullResult.warnings, []);
 
-  const wrongResult = resolveModelArgs('kilo', 'gpt-5.4');
-  assert.deepEqual(wrongResult.args, []);
-  assert.ok(wrongResult.warnings.includes('fixed_model_only'));
+  const result = resolveModelArgs('kilo', 'anthropic/claude-sonnet');
+  assert.deepEqual(result.args, ['--model', 'anthropic/claude-sonnet']);
+  assert.deepEqual(result.warnings, []);
 }
 
-function testResolveModelArgsFixedAdapterMatchingValue() {
-  const { resolveModelArgs } = require('../src/adapters');
+function testResolveExtraOptionArgsKilo() {
+  const { resolveExtraOptionArgs } = require('../src/adapters');
 
-  const matchResult = resolveModelArgs('kilo', 'Kilo Auto Free');
-  assert.deepEqual(matchResult.args, []);
-  assert.deepEqual(matchResult.warnings, []);
+  const result = resolveExtraOptionArgs('kilo', {
+    agent: 'plan',
+    thinking: true
+  });
+  assert.deepEqual(result.args, ['--agent', 'plan', '--thinking']);
+  assert.deepEqual(result.warnings, []);
+}
+
+function testResolveEffortArgsKiloUsesVariantFlag() {
+  const { resolveEffortArgs } = require('../src/adapters');
+
+  const autoResult = resolveEffortArgs('kilo', 'Kilo Auto Balanced', 'xhigh');
+  assert.deepEqual(autoResult.args, ['--variant', 'xhigh']);
+  assert.deepEqual(autoResult.warnings, []);
+
+  const discoveredResult = resolveEffortArgs('kilo', 'google/gemini-2.5-pro', 'high');
+  assert.deepEqual(discoveredResult.args, ['--variant', 'high']);
+  assert.deepEqual(discoveredResult.warnings, []);
 }
 
 function testResolveEffortArgsCodex() {
   const { resolveEffortArgs } = require('../src/adapters');
 
   const result = resolveEffortArgs('codex', null, 'high');
-  assert.deepEqual(result.args, ['--reasoning-effort', 'high']);
+  assert.deepEqual(result.args, ['-c', 'model_reasoning_effort="high"']);
   assert.deepEqual(result.warnings, []);
 
   const nullResult = resolveEffortArgs('codex', null, null);
@@ -1263,14 +1296,15 @@ function testResolveModelArgsQwenFixed() {
 function testResolveModelArgsOpencodeFixed() {
   const { resolveModelArgs } = require('../src/adapters');
 
-  const wrongResult = resolveModelArgs('opencode', 'some-other-model');
-  assert.ok(wrongResult.warnings.includes('fixed_model_only'));
+  const result = resolveModelArgs('opencode', 'anthropic/claude-sonnet');
+  assert.deepEqual(result.args, ['--model', 'anthropic/claude-sonnet']);
+  assert.deepEqual(result.warnings, []);
 }
 
 function testResolveEffortArgsFixedAdapters() {
   const { resolveEffortArgs } = require('../src/adapters');
 
-  for (const agent of ['kilo', 'qwen', 'opencode']) {
+  for (const agent of ['qwen', 'opencode']) {
     const result = resolveEffortArgs(agent, null, 'high');
     assert.deepEqual(result.args, [], `${agent} effort produces no args`);
     assert.ok(
@@ -1284,12 +1318,12 @@ function testResolveEffortArgsClaude() {
   const { resolveEffortArgs } = require('../src/adapters');
 
   const result = resolveEffortArgs('claude', 'opus', 'high');
-  assert.deepEqual(result.args, []);
-  assert.ok(result.warnings.includes('effort_not_automatable'));
+  assert.deepEqual(result.args, ['--effort', 'high']);
+  assert.deepEqual(result.warnings, []);
 
-  const haikuResult = resolveEffortArgs('claude', 'haiku', 'high');
-  assert.deepEqual(haikuResult.args, []);
-  assert.ok(haikuResult.warnings.includes('unsupported_effort_for_model'));
+  const maxResult = resolveEffortArgs('claude', 'sonnet', 'max');
+  assert.deepEqual(maxResult.args, ['--effort', 'max']);
+  assert.deepEqual(maxResult.warnings, []);
 
   const nullResult = resolveEffortArgs('claude', 'opus', null);
   assert.deepEqual(nullResult.args, []);
@@ -1337,19 +1371,19 @@ function testClaudePrimaryInvocationWithVerifiedModel() {
   assert.deepEqual(invocation.warnings, [], 'known model produces no warnings');
 }
 
-function testClaudePrimaryInvocationWithUnverifiedModel() {
+function testClaudePrimaryInvocationWithCustomModel() {
   const opts = buildResolvedOptions('claude', {
     cwd: 'C:\\repo',
     timeoutMs: 1000,
     prompt: 'Plan this',
-    model: 'claude-sonnet-4-6'  // Not in the known enum
+    model: 'claude-sonnet-4-6'
   });
   const invocation = adapterTest.buildClaudePrimaryInvocation('claude.exe', opts);
 
-  assert.ok(invocation.args.includes('--model'), 'includes --model flag for unverified model');
+  assert.ok(invocation.args.includes('--model'), 'includes --model flag for custom model');
   const modelIdx = invocation.args.indexOf('--model');
-  assert.equal(invocation.args[modelIdx + 1], 'claude-sonnet-4-6', 'unverified model passed through');
-  assert.ok(invocation.warnings.includes('unverified_model_value'), 'warns that model is unverified');
+  assert.equal(invocation.args[modelIdx + 1], 'claude-sonnet-4-6', 'custom model passed through');
+  assert.deepEqual(invocation.warnings, [], 'Claude accepts custom/full model names without a local enum warning');
 }
 
 function testClaudeFallbackRecordsCapabilityDowngrades() {
@@ -1449,16 +1483,22 @@ function testFormatAgentWarningEffortNotAutomatableReturnsNull() {
   assert.equal(msg, null, 'returns null for effort_not_automatable');
 }
 
-function testKiloPrimaryBuilderProducesWarnings() {
+function testKiloPrimaryBuilderAppliesDiscoveredStyleOptions() {
   const opts = buildResolvedOptions('kilo', {
     cwd: 'C:\\repo',
     timeoutMs: 1000,
     prompt: 'Do it',
-    model: 'gpt-5'
+    model: 'anthropic/claude-sonnet',
+    effort: 'high',
+    agentOptions: {
+      agent: 'plan'
+    }
   });
   const invocation = adapterTest.buildKiloPrimaryInvocation('kilo.exe', opts);
 
-  assert.ok(invocation.warnings.includes('fixed_model_only'), 'kilo produces fixed_model_only warning');
+  assert.ok(invocation.args.includes('--model'), 'kilo forwards model selection');
+  assert.ok(invocation.args.includes('--agent'), 'kilo forwards agent selection');
+  assert.ok(invocation.args.includes('--variant'), 'kilo forwards variant selection');
 }
 
 function testQwenPrimaryBuilderProducesWarnings() {
@@ -1473,16 +1513,22 @@ function testQwenPrimaryBuilderProducesWarnings() {
   assert.ok(invocation.warnings.includes('fixed_model_only'), 'qwen produces fixed_model_only warning');
 }
 
-function testOpencodePrimaryBuilderProducesWarnings() {
+function testOpencodePrimaryBuilderAppliesModelOptions() {
   const opts = buildResolvedOptions('opencode', {
     cwd: 'C:\\repo',
     timeoutMs: 1000,
     prompt: 'Do it',
-    model: 'gpt-5'
+    model: 'anthropic/claude-sonnet',
+    agentOptions: {
+      agent: 'plan'
+    }
   });
   const invocation = adapterTest.buildOpencodeInvocation('opencode.exe', opts);
 
-  assert.ok(invocation.warnings.includes('fixed_model_only'), 'opencode produces fixed_model_only warning');
+  assert.ok(invocation.args.includes('--model'), 'opencode forwards model selection');
+  assert.ok(invocation.args.includes('--agent'), 'opencode forwards agent selection');
+  assert.strictEqual(invocation.args.filter((arg) => arg === '--agent').length, 1,
+    'explicit opencode agent selection should not duplicate write-mode --agent flags');
 }
 
 // ── Commit 5: Provider Registry and Capability Tests ───────────────────────
@@ -1508,6 +1554,16 @@ function testGetCapabilityProfileOpenAICompatible() {
   assert.strictEqual(profile.supportsWriteAccess, false);
   assert.strictEqual(profile.supportsModelListing, true);
   assert.strictEqual(profile.supportsHealthChecks, true);
+}
+
+function testGetCapabilityProfileKilo() {
+  const { getCapabilityProfile } = require('../src/adapters');
+
+  const profile = getCapabilityProfile('kilo');
+  assert.ok(profile, 'kilo profile exists');
+  assert.strictEqual(profile.family, 'cli');
+  assert.strictEqual(profile.supportsWriteAccess, true);
+  assert.strictEqual(profile.supportsReasoningEffort, true);
 }
 
 function testCheckCapabilityClaudeWriteAccess() {
@@ -2769,39 +2825,33 @@ function testResolveEffortArgsClaudeUnknownModelDoesNotUseDefault() {
   // When an unknown model is provided with effort, should NOT fall back to
   // default (sonnet) for validation — just say effort_not_automatable.
   const result = resolveEffortArgs('claude', 'claude-sonnet-4-6', 'high');
-  assert.deepEqual(result.args, []);
-  assert.ok(result.warnings.includes('effort_not_automatable'),
-    'unknown model with effort returns effort_not_automatable, not unsupported_effort_for_model');
-  assert.ok(!result.warnings.includes('unsupported_effort_for_model'),
-    'should not claim effort is unsupported based on default model semantics');
+  assert.deepEqual(result.args, ['--effort', 'high']);
+  assert.deepEqual(result.warnings, [],
+    'Claude effort is a CLI-level enum and does not depend on Loopi model aliases');
 }
 
 function testResolveEffortArgsClaudeDefaultModelStillValidatesEffort() {
   const { resolveEffortArgs } = require('../src/adapters');
 
-  // When no model is requested, default model (sonnet) is used.
-  // 'max' is not in sonnet's efforts ['low', 'medium', 'high'],
-  // so it should produce unsupported_effort_for_model.
-  const result = resolveEffortArgs('claude', null, 'max');
+  // 'xhigh' is not exposed by the installed Claude CLI's effort enum.
+  const result = resolveEffortArgs('claude', null, 'xhigh');
   assert.deepEqual(result.args, []);
-  assert.ok(result.warnings.includes('unsupported_effort_for_model'),
-    'default model (sonnet) with invalid effort returns unsupported_effort_for_model');
+  assert.ok(result.warnings.includes('unknown_effort_value'),
+    'invalid Claude effort returns unknown_effort_value');
 }
 
 function testResolveEffortArgsClaudeKnownModelStillValidates() {
   const { resolveEffortArgs } = require('../src/adapters');
 
-  // Known model + invalid effort should still produce unsupported_effort_for_model
+  // Unknown model aliases do not disable Claude's CLI-level effort flag.
   const haikuResult = resolveEffortArgs('claude', 'haiku', 'high');
-  assert.deepEqual(haikuResult.args, []);
-  assert.ok(haikuResult.warnings.includes('unsupported_effort_for_model'),
-    'known model with invalid effort returns unsupported_effort_for_model');
+  assert.deepEqual(haikuResult.args, ['--effort', 'high']);
+  assert.deepEqual(haikuResult.warnings, []);
 
-  // Known model + valid effort returns effort_not_automatable
-  const opusResult = resolveEffortArgs('claude', 'opus', 'high');
-  assert.deepEqual(opusResult.args, []);
-  assert.ok(opusResult.warnings.includes('effort_not_automatable'),
-    'known model with valid effort returns effort_not_automatable');
+  // Known model + valid effort is now passed through to Claude's CLI flag.
+  const opusResult = resolveEffortArgs('claude', 'opus', 'max');
+  assert.deepEqual(opusResult.args, ['--effort', 'max']);
+  assert.deepEqual(opusResult.warnings, []);
 }
 
 function testResolveWriteModeArgs() {
@@ -2883,7 +2933,8 @@ async function main() {
   testClaudeFallbackOmitsPermissionMode();
   testClaudePreflightInvocationIsHelp();
   testCodexPreflightInvocationTargetsExecHelp();
-  testKiloPrimaryInvocationUsesRunAutoDir();
+  testKiloPrimaryInvocationUsesRunDir();
+  testKiloPrimaryInvocationEnablesAutoWhenCanWrite();
   testKiloFallbackInvocationDropsAuto();
   testKiloPreflightInvocationTargetsRunHelp();
   testKiloFallbackDetection();
@@ -2935,8 +2986,9 @@ async function main() {
   testCodexPrimaryInvocationWithUnknownEffort();
   testClaudePrimaryInvocationReportsEffortWarning();
   testResolveModelArgsCodexOpen();
-  testResolveModelArgsFixedAdapter();
-  testResolveModelArgsFixedAdapterMatchingValue();
+  testResolveModelArgsKiloOpen();
+  testResolveExtraOptionArgsKilo();
+  testResolveEffortArgsKiloUsesVariantFlag();
   testResolveEffortArgsCodex();
   testResolveEffortArgsUnsupported();
   testResolveEffortArgsCodexUnknownValue();
@@ -2948,7 +3000,7 @@ async function main() {
   testGeminiPrimaryInvocationWithModel();
   testGeminiPrimaryInvocationWithoutModel();
   testClaudePrimaryInvocationWithVerifiedModel();
-  testClaudePrimaryInvocationWithUnverifiedModel();
+  testClaudePrimaryInvocationWithCustomModel();
   testClaudePrimaryInvocationWithoutModel();
   testClaudeFallbackRecordsCapabilityDowngrades();
   testClaudeFallbackNoDowngradesWithoutModelOrWrite();
@@ -2967,13 +3019,14 @@ async function main() {
   testFormatAgentWarningUnknownModel();
   testFormatAgentWarningUnsupportedEffortForModel();
   testFormatAgentWarningEffortNotAutomatableReturnsNull();
-  testKiloPrimaryBuilderProducesWarnings();
+  testKiloPrimaryBuilderAppliesDiscoveredStyleOptions();
   testQwenPrimaryBuilderProducesWarnings();
-  testOpencodePrimaryBuilderProducesWarnings();
+  testOpencodePrimaryBuilderAppliesModelOptions();
 
   // Commit 5: Provider Registry and Capability Tests
   testGetCapabilityProfileClaude();
   testGetCapabilityProfileOpenAICompatible();
+  testGetCapabilityProfileKilo();
   testCheckCapabilityClaudeWriteAccess();
   testCheckCapabilityOpenAIWriteAccess();
   testGetCapabilityProfileUnknownAdapter();

@@ -59,6 +59,7 @@ function createLoopiApp(env = {}) {
     rawEditorText: '',
     rawEditorDirty: false,
     contextStatus: null,
+    adapterDiscovery: null,
     pendingActions: {},
     contextBlocker: null
   };
@@ -173,6 +174,7 @@ function createLoopiApp(env = {}) {
       refreshProviderStatus: actions.refreshProviderStatus,
       refreshRuns: actions.refreshRuns,
       refreshContextStatus: actions.refreshContextStatus,
+      refreshAdapterOptions: actions.refreshAdapterOptions,
       prepareContext: actions.prepareContext,
       retryInit: actions.retryInit,
       runCurrentConfig: actions.runCurrentConfig,

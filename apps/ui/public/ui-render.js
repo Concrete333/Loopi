@@ -41,6 +41,253 @@
       return isPending(name) ? busyLabel : defaultLabel;
     }
 
+    function helpHint(text) {
+      return `
+        <span class="setting-hint" tabindex="0" aria-label="${escapeHtml(text)}">
+          <span class="setting-hint__trigger" aria-hidden="true">?</span>
+          <span class="setting-hint__bubble" role="tooltip">${escapeHtml(text)}</span>
+        </span>
+      `;
+    }
+
+    function labelWithHint(label, text) {
+      return `
+        <span class="setting-label">
+          <span>${escapeHtml(label)}</span>
+          ${helpHint(text)}
+        </span>
+      `;
+    }
+
+    function adapterOptionMetadataById() {
+      const entries = state.bootstrap && Array.isArray(state.bootstrap.adapterOptions)
+        ? state.bootstrap.adapterOptions
+        : [];
+      return entries.reduce((acc, entry) => {
+        if (entry && entry.agentId) {
+          acc[entry.agentId] = entry.schema || {};
+        }
+        return acc;
+      }, {});
+    }
+
+    function discoveredOption(agentId, optionKey) {
+      const agentDiscovery = state.adapterDiscovery && state.adapterDiscovery[agentId];
+      return agentDiscovery && agentDiscovery.options
+        ? agentDiscovery.options[optionKey]
+        : null;
+    }
+
+    function uniqueOptionValues(values) {
+      const ordered = [];
+      const byValue = new Map();
+      (Array.isArray(values) ? values : []).forEach((entry) => {
+        const value = typeof entry === 'string' ? entry : entry && entry.value || entry && entry.id;
+        if (!value) {
+          return;
+        }
+        const normalized = typeof entry === 'string'
+          ? { value: entry, label: entry }
+          : {
+            ...entry,
+            value,
+            label: entry.label || value,
+            supportsThinking: Boolean(entry.supportsThinking)
+          };
+        if (!byValue.has(value)) {
+          byValue.set(value, normalized);
+          ordered.push(value);
+          return;
+        }
+        const existing = byValue.get(value);
+        byValue.set(value, {
+          ...existing,
+          ...normalized,
+          value,
+          label: normalized.label || existing.label || value,
+          efforts: Array.isArray(normalized.efforts) && normalized.efforts.length > 0
+            ? normalized.efforts
+            : (existing.efforts || []),
+          supportsThinking: Boolean(existing.supportsThinking || normalized.supportsThinking)
+        });
+      });
+      return ordered.map((value) => byValue.get(value));
+    }
+
+    function optionValues(agentId, optionKey, optionSchema) {
+      const discovered = discoveredOption(agentId, optionKey);
+      const discoveredValues = discovered && discovered.status === 'ready'
+        ? discovered.values
+        : [];
+      return uniqueOptionValues([
+        ...(optionSchema && Array.isArray(optionSchema.values) ? optionSchema.values : []),
+        ...discoveredValues
+      ]);
+    }
+
+    function optionDefaultChoice(agentId, optionKey, optionSchema) {
+      const discovered = discoveredOption(agentId, optionKey);
+      if (discovered && discovered.defaultOption) {
+        return discovered.defaultOption;
+      }
+      if (optionSchema && optionSchema.defaultOptionMode === 'discovered') {
+        return null;
+      }
+      return { label: 'Default' };
+    }
+
+    function renderDatalist(id, values) {
+      if (!values || values.length === 0) {
+        return '';
+      }
+      return `
+        <datalist id="${escapeHtml(id)}">
+          ${values.map((entry) => `<option value="${escapeHtml(entry.value)}">${escapeHtml(entry.label || entry.value)}</option>`).join('')}
+        </datalist>
+      `;
+    }
+
+    function renderAgentOptionTextControl(agentId, optionKey, option, optionSchema) {
+      const currentValue = option && option[optionKey] ? option[optionKey] : '';
+      const listId = `agent-${agentId}-${optionKey}-list`;
+      const values = optionValues(agentId, optionKey, optionSchema);
+      const shouldRenderSelect = values.length > 0 && (
+        optionKey === 'model' || optionKey === 'agent' || optionKey === 'variant' || (optionSchema && optionSchema.kind === 'enum')
+      ) && (!optionSchema || optionSchema.renderMode !== 'input');
+      if (optionSchema && optionSchema.mode === 'fixed') {
+        return `
+          <input value="${escapeHtml(optionSchema.fixedValue || '')}" disabled>
+          <p class="muted">This adapter does not expose an automated override for this field.</p>
+        `;
+      }
+      if (optionSchema && optionSchema.mode === 'unsupported') {
+        return `
+          <input value="" placeholder="Unsupported by this adapter" disabled>
+        `;
+      }
+      if (shouldRenderSelect) {
+        const hasCurrentValue = currentValue && values.some((entry) => entry.value === currentValue);
+        const defaultChoice = optionDefaultChoice(agentId, optionKey, optionSchema);
+        return `
+          <select data-agent-option="${escapeHtml(agentId)}:${escapeHtml(optionKey)}">
+            ${defaultChoice ? `<option value="" ${currentValue ? '' : 'selected'}>${escapeHtml(defaultChoice.label || 'Default')}</option>` : ''}
+            ${values.map((entry) => `<option value="${escapeHtml(entry.value)}" ${currentValue === entry.value ? 'selected' : ''}>${escapeHtml(entry.label || entry.value)}</option>`).join('')}
+            ${currentValue && !hasCurrentValue ? `<option value="${escapeHtml(currentValue)}" selected>Custom: ${escapeHtml(currentValue)}</option>` : ''}
+          </select>
+        `;
+      }
+      const placeholder = optionKey === 'model' && optionSchema && optionSchema.allowCustom
+        ? 'Alias or full model name'
+        : 'Optional';
+      return `
+        <input data-agent-option="${escapeHtml(agentId)}:${escapeHtml(optionKey)}" list="${escapeHtml(listId)}" value="${escapeHtml(currentValue)}" placeholder="${escapeHtml(placeholder)}">
+        ${renderDatalist(listId, values)}
+      `;
+    }
+
+    function effortValuesForAgent(agentId, option, modelSchema, effortSchema) {
+      if (!effortSchema || effortSchema.mode === 'unsupported') {
+        return [];
+      }
+      if (effortSchema.mode === 'model_dependent' && modelSchema) {
+        const selectedModel = option && option.model ? option.model : modelSchema.defaultValue;
+        const modelValues = optionValues(agentId, 'model', modelSchema);
+        const matched = modelValues.find((entry) => String(entry.value).toLowerCase() === String(selectedModel || '').toLowerCase());
+        if (matched && Array.isArray(matched.efforts)) {
+          return matched.efforts.map((value) => ({ value, label: value }));
+        }
+        const effortSet = new Set();
+        modelValues.forEach((entry) => {
+          (entry.efforts || []).forEach((value) => effortSet.add(value));
+        });
+        return Array.from(effortSet).map((value) => ({ value, label: value }));
+      }
+      if (Array.isArray(effortSchema.values)) {
+        return effortSchema.values.map((entry) => {
+          if (typeof entry === 'string') {
+            return { value: entry, label: entry };
+          }
+          const value = entry && (entry.value || entry.id || entry.cliValue);
+          return {
+            value,
+            label: entry && entry.label ? entry.label : value
+          };
+        }).filter((entry) => entry.value);
+      }
+      return [];
+    }
+
+    function selectedModelEntry(agentId, option, modelSchema) {
+      if (!modelSchema) {
+        return null;
+      }
+      const selectedModel = option && option.model ? option.model : modelSchema.defaultValue;
+      if (!selectedModel) {
+        return null;
+      }
+      const modelValues = optionValues(agentId, 'model', modelSchema);
+      return modelValues.find((entry) => String(entry.value).toLowerCase() === String(selectedModel).toLowerCase()) || null;
+    }
+
+    function modelSupportsBooleanOption(agentId, option, modelSchema, optionKey) {
+      const selected = selectedModelEntry(agentId, option, modelSchema);
+      if (optionKey === 'thinking') {
+        return Boolean(selected && selected.supportsThinking);
+      }
+      return true;
+    }
+
+    function renderAgentEffortControl(agentId, option, modelSchema, effortSchema) {
+      const currentValue = option && option.effort ? option.effort : '';
+      const values = effortValuesForAgent(agentId, option, modelSchema, effortSchema);
+      const disabled = !effortSchema || effortSchema.mode === 'unsupported' || values.length === 0;
+      return `
+        <select data-agent-option="${escapeHtml(agentId)}:effort" ${disabled ? 'disabled' : ''}>
+          <option value="" ${currentValue ? '' : 'selected'}>${disabled ? 'Unsupported' : 'Default'}</option>
+          ${values.map((entry) => `<option value="${escapeHtml(entry.value)}" ${currentValue === entry.value ? 'selected' : ''}>${escapeHtml(entry.label || entry.value)}</option>`).join('')}
+        </select>
+      `;
+    }
+
+    function renderExtraAgentOptionControls(agentId, option, schema) {
+      const options = schema && schema.options ? schema.options : {};
+      const modelSchema = options.model;
+      return Object.keys(options)
+        .filter((key) => {
+          if (key === 'model' || key === 'effort') {
+            return false;
+          }
+          const optionSchema = options[key];
+          return !(options.effort && optionSchema && options.effort.flag && optionSchema.flag === options.effort.flag);
+        })
+        .map((key) => {
+          const optionSchema = options[key];
+          if (optionSchema.kind === 'boolean') {
+            const currentValue = option && typeof option[key] === 'boolean' ? String(option[key]) : '';
+            const disabled = Boolean(optionSchema.modelDependent)
+              && !modelSupportsBooleanOption(agentId, option, modelSchema, key);
+            return `
+              <div class="field">
+                <label>${escapeHtml(optionSchema.label || key)}</label>
+                <select data-agent-option="${escapeHtml(agentId)}:${escapeHtml(key)}" data-agent-option-type="boolean" ${disabled ? 'disabled' : ''}>
+                  <option value="" ${currentValue === '' || disabled ? 'selected' : ''}>${disabled ? 'Unsupported' : 'Default'}</option>
+                  ${disabled ? '' : `
+                    <option value="true" ${currentValue === 'true' ? 'selected' : ''}>On</option>
+                    <option value="false" ${currentValue === 'false' ? 'selected' : ''}>Off</option>
+                  `}
+                </select>
+              </div>
+            `;
+          }
+          return `
+            <div class="field">
+              <label>${escapeHtml(optionSchema.label || key)}</label>
+              ${renderAgentOptionTextControl(agentId, key, option, optionSchema)}
+            </div>
+          `;
+        }).join('');
+    }
+
     function contextBlockerBanner() {
       const blocker = state.contextBlocker;
       if (!blocker) {
@@ -321,6 +568,7 @@
       const adapterOptions = state.bootstrap && Array.isArray(state.bootstrap.adapterMetadata)
         ? state.bootstrap.adapterMetadata
         : [];
+      const adapterOptionSchemas = adapterOptionMetadataById();
       const providers = Object.entries(state.configRaw.providers || {});
 
       const agentControls = adapterOptions.map((meta) => `
@@ -329,7 +577,6 @@
             <input type="checkbox" data-agent-toggle="${escapeHtml(meta.id)}" ${selectedAgents.includes(meta.id) ? 'checked' : ''}>
             <span>${escapeHtml(meta.displayName)}</span>
           </label>
-          <span class="chip chip--neutral">${meta.supportsWriteAccess ? 'Writable' : 'Read-only'}</span>
         </div>
       `).join('');
 
@@ -380,6 +627,14 @@
         ? selectedAgents.map((agentId) => {
             const option = state.configRaw.settings.agentOptions[agentId] || {};
             const policy = state.configRaw.settings.agentPolicies[agentId];
+            const canWrite = policy === false || (policy && policy.canWrite === false) ? false : true;
+            const schema = adapterOptionSchemas[agentId] || {};
+            const modelSchema = schema.options && schema.options.model;
+            const effortSchema = schema.options && schema.options.effort;
+            const modelDiscovery = discoveredOption(agentId, 'model');
+            const modelDiscoveryNote = modelDiscovery && modelDiscovery.error
+              ? `<p class="muted">Model discovery unavailable: ${escapeHtml(modelDiscovery.error)}</p>`
+              : '';
             return `
               <div class="inline-panel">
                 <div class="section-heading">
@@ -391,23 +646,19 @@
                 <div class="field-grid">
                   <div class="field">
                     <label>Model</label>
-                    <input data-agent-option="${escapeHtml(agentId)}:model" value="${escapeHtml(option.model || '')}">
+                    ${renderAgentOptionTextControl(agentId, 'model', option, modelSchema)}
+                    ${modelDiscoveryNote}
                   </div>
                   <div class="field">
                     <label>Effort</label>
-                    <select data-agent-option="${escapeHtml(agentId)}:effort">
-                      <option value="" ${option.effort ? '' : 'selected'}>Default</option>
-                      <option value="low" ${option.effort === 'low' ? 'selected' : ''}>Low</option>
-                      <option value="medium" ${option.effort === 'medium' ? 'selected' : ''}>Medium</option>
-                      <option value="high" ${option.effort === 'high' ? 'selected' : ''}>High</option>
-                    </select>
+                    ${renderAgentEffortControl(agentId, option, modelSchema, effortSchema)}
                   </div>
+                  ${renderExtraAgentOptionControls(agentId, option, schema)}
                   <div class="field">
                     <label>Can Write</label>
                     <select data-agent-policy="${escapeHtml(agentId)}">
-                      <option value="" ${policy === undefined ? 'selected' : ''}>Default</option>
-                      <option value="true" ${policy === true || (policy && policy.canWrite === true) ? 'selected' : ''}>Yes</option>
-                      <option value="false" ${policy === false || (policy && policy.canWrite === false) ? 'selected' : ''}>No</option>
+                      <option value="true" ${canWrite ? 'selected' : ''}>Yes</option>
+                      <option value="false" ${canWrite ? '' : 'selected'}>No</option>
                     </select>
                   </div>
                 </div>
@@ -433,11 +684,11 @@
         <div class="grid grid--double">
           <div class="inline-panel">
             <div class="field">
-              <label>Project Root</label>
+              <label>${labelWithHint('Project Root', 'The active project folder for this Loopi session. Shared files, runs, presets, and task.json all resolve from here, so this value is read-only in the UI.')}</label>
               <input readonly value="${escapeHtml(state.bootstrap ? state.bootstrap.projectRoot : '')}">
             </div>
             <div class="field">
-              <label>Context Directory</label>
+              <label>${labelWithHint('Context Directory', 'The folder of reference material Loopi can pull into planning, implementation, and review. When you change it, refresh or prepare context so the cache matches.')}</label>
               <input data-context-dir value="${escapeHtml(context.dir || './context')}">
             </div>
             <div class="check-grid">
@@ -445,52 +696,58 @@
               <div class="check-row">
                 <label>
                   <input type="checkbox" data-context-enabled ${state.configRaw.context ? 'checked' : ''}>
-                  <span>Use shared context folder</span>
+                  <span class="setting-copy">
+                    <span>Use shared context folder</span>
+                    ${helpHint('Turns prepared context on for this task. When disabled, Loopi ignores the Context Directory and runs without shared reference material.')}</span>
                 </label>
               </div>
               <div class="check-row">
                 <label>
                   <input type="checkbox" data-setting-toggle="continueOnError" ${state.configRaw.settings.continueOnError ? 'checked' : ''}>
-                  <span>Continue on error</span>
+                  <span class="setting-copy">
+                    <span>Continue on error</span>
+                    ${helpHint('Keeps a workflow moving after a failed step when possible, instead of stopping immediately at the first error.')}</span>
                 </label>
               </div>
               <div class="check-row">
                 <label>
                   <input type="checkbox" data-setting-toggle="writeScratchpad" ${state.configRaw.settings.writeScratchpad !== false ? 'checked' : ''}>
-                  <span>Write scratchpad</span>
+                  <span class="setting-copy">
+                    <span>Write scratchpad</span>
+                    ${helpHint('Writes the legacy shared/scratchpad.txt summary during runs so the latest output is easy to inspect outside the UI.')}</span>
                 </label>
               </div>
             </div>
           </div>
           <div class="inline-panel">
             <div class="field">
-              <label>Timeout (ms)</label>
+              <label>${labelWithHint('Timeout (ms)', 'How long Loopi will wait before treating a step as timed out. Increase this for slower models or larger tasks; decrease it if you want failures to surface faster.')}</label>
               <input data-setting-number="timeoutMs" type="number" min="1000" step="1000" value="${escapeHtml(state.configRaw.settings.timeoutMs || 180000)}">
             </div>
             ${state.advanced ? `
               <div class="field-grid">
                 <div class="field">
-                  <label>Plan Max Files</label>
+                  <label>${labelWithHint('Plan Max Files', 'Caps how many prepared context files or excerpts can be included during planning. Lower values keep prompts tighter; higher values give the planner more reference material.')}</label>
                   <input data-context-cap="files:plan" type="number" min="1" value="${escapeHtml(context.maxFilesPerPhase && context.maxFilesPerPhase.plan || '')}">
                 </div>
                 <div class="field">
-                  <label>Implement Max Files</label>
+                  <label>${labelWithHint('Implement Max Files', 'Caps how many context files or excerpts implementation steps can receive. Use this to keep coding prompts focused on the most relevant references.')}</label>
                   <input data-context-cap="files:implement" type="number" min="1" value="${escapeHtml(context.maxFilesPerPhase && context.maxFilesPerPhase.implement || '')}">
                 </div>
                 <div class="field">
-                  <label>Review Max Files</label>
+                  <label>${labelWithHint('Review Max Files', 'Caps how many context files or excerpts reviewers can see. Raising it can improve coverage; lowering it keeps review prompts leaner.')}</label>
                   <input data-context-cap="files:review" type="number" min="1" value="${escapeHtml(context.maxFilesPerPhase && context.maxFilesPerPhase.review || '')}">
                 </div>
                 <div class="field">
-                  <label>Plan Max Chars</label>
+                  <label>${labelWithHint('Plan Max Chars', 'Caps the total context characters available to planning prompts after selection and truncation. Useful when you want to control prompt size and model cost.')}</label>
                   <input data-context-cap="chars:plan" type="number" min="1" value="${escapeHtml(context.maxCharsPerPhase && context.maxCharsPerPhase.plan || '')}">
                 </div>
                 <div class="field">
-                  <label>Implement Max Chars</label>
+                  <label>${labelWithHint('Implement Max Chars', 'Caps the total context characters implementation steps can receive. Lower it to keep code-writing prompts compact, or raise it when the task needs more source material.')}</label>
                   <input data-context-cap="chars:implement" type="number" min="1" value="${escapeHtml(context.maxCharsPerPhase && context.maxCharsPerPhase.implement || '')}">
                 </div>
                 <div class="field">
-                  <label>Review Max Chars</label>
+                  <label>${labelWithHint('Review Max Chars', 'Caps the total context characters available during review. This helps balance deeper review context against prompt size and runtime cost.')}</label>
                   <input data-context-cap="chars:review" type="number" min="1" value="${escapeHtml(context.maxCharsPerPhase && context.maxCharsPerPhase.review || '')}">
                 </div>
               </div>
@@ -505,6 +762,17 @@
           </div>
         </div>
         <div class="grid grid--cards">${agentControls}</div>
+
+        <div class="section-heading">
+          <div>
+            <h3>Agent Defaults</h3>
+            <p>Set model, effort, and default write permissions without dropping into raw config.</p>
+          </div>
+          <button class="button button--secondary" id="refresh-adapter-options"${pendingAttr('adapterOptions')}>
+            ${pendingLabel('adapterOptions', 'Refresh Model Lists', 'Refreshing...')}
+          </button>
+        </div>
+        <div class="stack">${policyCards}</div>
 
         <div class="section-heading">
           <div>
@@ -532,14 +800,6 @@
             <button class="button button--primary" id="add-provider">Add Provider</button>
           </div>
         </div>
-
-        <div class="section-heading">
-          <div>
-            <h3>Agent Defaults</h3>
-            <p>Set model, effort, and default write permissions without dropping into raw config.</p>
-          </div>
-        </div>
-        <div class="stack">${policyCards}</div>
 
         <details class="details-toggle" ${state.advanced ? 'open' : ''}>
           <summary>Raw JSON escape hatch</summary>

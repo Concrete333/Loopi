@@ -14,6 +14,24 @@
       render
     } = deps;
 
+    function syncAgentPolicyDefaults(draft) {
+      if (!draft || typeof draft !== 'object') {
+        return;
+      }
+      const agents = Array.isArray(draft.agents) ? draft.agents : [];
+      if (!draft.settings || typeof draft.settings !== 'object') {
+        draft.settings = {};
+      }
+      if (!draft.settings.agentPolicies || typeof draft.settings.agentPolicies !== 'object') {
+        draft.settings.agentPolicies = {};
+      }
+      agents.forEach((agentId) => {
+        if (draft.settings.agentPolicies[agentId] === undefined) {
+          draft.settings.agentPolicies[agentId] = { canWrite: true };
+        }
+      });
+    }
+
     function ensureConfigShape() {
       if (!state.configRaw || typeof state.configRaw !== 'object') {
         return false;
@@ -36,6 +54,7 @@
       if (!state.configRaw.settings.agentOptions || typeof state.configRaw.settings.agentOptions !== 'object') {
         state.configRaw.settings.agentOptions = {};
       }
+      syncAgentPolicyDefaults(state.configRaw);
       return true;
     }
 
@@ -189,6 +208,7 @@
         const nextAgents = new Set(Array.isArray(draft.agents) ? draft.agents : []);
         if (enabled) {
           nextAgents.add(agentId);
+          draft.settings.agentPolicies[agentId] = { canWrite: true };
         } else {
           nextAgents.delete(agentId);
           delete draft.settings.agentPolicies[agentId];
@@ -202,6 +222,7 @@
           }
         }
         draft.agents = Array.from(nextAgents);
+        syncAgentPolicyDefaults(draft);
       });
     }
 

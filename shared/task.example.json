@@ -118,6 +118,22 @@
       "fallback": "claude"
     }
   },
+  "kiloOptionsExample": {
+    "mode": "plan",
+    "prompt": "Plan a focused implementation using Kilo with an explicit model and agent mode.",
+    "agents": ["kilo"],
+    "settings": {
+      "timeoutMs": 180000,
+      "agentOptions": {
+        "kilo": {
+          "model": "anthropic/claude-sonnet-4-6",
+          "agent": "plan",
+          "effort": "high",
+          "thinking": true
+        }
+      }
+    }
+  },
   "manualForkExample": {
     "mode": "implement",
     "prompt": "Retry the prior attempt with a tighter scope and one extra repair cycle.",

@@ -262,6 +262,17 @@ class ControlPlaneService {
     return setupService.getAllAdapterMetadata();
   }
 
+  getAllAdapterOptionMetadata() {
+    return setupService.getAllAdapterOptionMetadata();
+  }
+
+  async discoverAdapterOptions(agentIds, options = {}) {
+    return setupService.discoverAllAdapterOptions(agentIds, {
+      ...options,
+      cwd: this.projectRoot
+    });
+  }
+
   async runAdapterInstall(agentId, { approved = false } = {}) {
     return setupService.runAdapterInstall(agentId, {
       approved,

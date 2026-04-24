@@ -96,38 +96,42 @@ Rules:
 - Write access only applies during `implement` mode, and only to the origin agent for that sub-run.
 - `plan` and `review` modes are always read-only, regardless of agent policy.
 - Loopi passes the `canWrite` intent to each agent's CLI. The actual CLI flags used depend on the installed tool.
+- For Kilo, write-enabled implement steps run with `kilo run --auto`; read-only steps omit `--auto` and rely on the read-only prompt.
 - A validation warning is emitted when `canWrite: true` is configured, reminding you that the agent will modify repository files directly.
 
 ## Agent Options
 
-`settings.agentOptions` is an optional object for specifying per-agent model or effort preferences.
+`settings.agentOptions` is an optional object for specifying per-agent runtime preferences. The Settings UI reads the same adapter metadata and renders the fields each installed adapter can support.
 
 ```json
 "agentOptions": {
   "codex": { "model": "gpt-5.4", "effort": "medium" },
-  "claude": { "model": "opus" },
-  "gemini": { "model": "gemini-2.5-flash" }
+  "claude": { "model": "opus", "effort": "high" },
+  "gemini": { "model": "gemini-2.5-flash" },
+  "kilo": { "model": "anthropic/claude-sonnet-4-6", "agent": "plan", "effort": "high" }
 }
 ```
 
 Rules:
 
-- Both `model` and `effort` are optional. Omit to use the CLI default.
+- All agent options are optional. Omit a field to use the CLI default.
 - Keys must match a CLI adapter that appears either in the top-level `agents` list or in a CLI-backed role assignment.
+- Nested option keys are derived from the adapter config. This keeps validation strict while allowing adapters such as Kilo or Opencode to expose extra fields like `agent` or `thinking`.
 - When an option cannot be applied, a warning is recorded on the step record and appears in the scratchpad output.
+- The UX app discovers model lists from local adapter state when available. Kilo and Opencode use their `models` command; Kilo uses verbose model metadata to populate model-specific `effort` values from variants; Codex reads local `config.toml` model and migration hints; Claude reads model-picker options from the installed CLI bundle; unavailable discovery falls back to manual entry.
 
 Per-agent support summary:
 
-| Agent | `model` | `effort` |
-| --- | --- | --- |
-| codex | Applied via `--model` | Applied via `--reasoning-effort` with `low`, `medium`, `high` |
-| claude | Applied via `--model` with warnings for unverified strings | Not automatable |
-| gemini | Applied via `--model` for supported Gemini values | Not supported |
-| kilo | Fixed model only | Not supported |
-| qwen | Fixed model only | Not supported |
-| opencode | Fixed model only | Not supported |
+| Agent | `model` | `effort` / variants | Extra adapter options |
+| --- | --- | --- | --- |
+| codex | Applied via `--model` | Applied via `-c model_reasoning_effort="..."` with `none`, `minimal`, `low`, `medium`, `high`, `xhigh` | None |
+| claude | Applied via `--model` for discovered CLI model-picker options; discovered `Default` omits `--model` | Applied via `--effort` with `low`, `medium`, `high`, `max` | None |
+| gemini | Applied via `--model` for supported Gemini values | Not supported | None |
+| kilo | Applied via `--model`; the UX app can discover installed CLI model choices and includes Kilo Auto Frontier/Balanced/Free | `effort` is passed via Kilo's `--variant` flag and populated per discovered model when variants are exposed | `agent`, model-aware `thinking` |
+| qwen | Fixed model only | Not supported | None |
+| opencode | Applied via `--model`; the UX app can discover installed CLI model choices | Not supported | `agent` |
 
-Unknown keys are rejected. Each `agentOptions.<agent>` object may only contain `model` and `effort`.
+Unknown keys are rejected. Each `agentOptions.<agent>` object may only contain keys declared by that adapter.
 
 ## Fallback Downgrades
 
@@ -136,7 +140,7 @@ When an agent's primary invocation fails and a fallback is used, some capabiliti
 | Agent | Fallback | Capabilities dropped |
 | --- | --- | --- |
 | claude | Minimal fallback | `--permission-mode`, `--model` |
-| codex | Minimal fallback | `--sandbox`, `--model`, `--reasoning-effort` |
+| codex | Minimal fallback | `--sandbox`, `--model`, `-c model_reasoning_effort` |
 | qwen | Fallback | `--approval-mode` |
 
 The Codex safe fallback preserves write mode, model, and effort.

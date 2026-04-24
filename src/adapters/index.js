@@ -50,8 +50,8 @@ const PROVIDER_REGISTRY = {
     supportsCompletions: false,
     supportsStreaming: false,
     supportsToolCalling: false,
-    supportsWriteAccess: false,
-    supportsReasoningEffort: false,
+    supportsWriteAccess: true,
+    supportsReasoningEffort: true,
     supportsModelListing: false,
     supportsHealthChecks: false
   },
@@ -987,7 +987,12 @@ async function runAgent(agentName, options) {
   const resolvedEffortArgs = options.effort != null
     ? resolveEffortArgs(agentName, options.model || null, options.effort)
     : { args: [], warnings: [] };
-  const invocationWarnings = [...resolvedModelArgs.warnings, ...resolvedEffortArgs.warnings];
+  const resolvedExtraOptionArgs = resolveExtraOptionArgs(agentName, options.agentOptions || {});
+  const invocationWarnings = [
+    ...resolvedModelArgs.warnings,
+    ...resolvedEffortArgs.warnings,
+    ...resolvedExtraOptionArgs.warnings
+  ];
 
   // Emit warnings to console once, before any invocation runs.
   for (const w of invocationWarnings) {
@@ -1000,6 +1005,7 @@ async function runAgent(agentName, options) {
     ...options,
     resolvedModelArgs,
     resolvedEffortArgs,
+    resolvedExtraOptionArgs,
     warnings: invocationWarnings
   };
 
@@ -1784,6 +1790,13 @@ function resolveModelArgs(agentName, requestedModel) {
   if (mode === 'startup_flag') {
     const flag = modelConfig.flag || '--model';
     const values = modelConfig.values;
+    const requestedLower = String(requestedModel).trim().toLowerCase();
+    const defaultSentinels = Array.isArray(modelConfig.defaultSentinelValues)
+      ? modelConfig.defaultSentinelValues.map((value) => String(value).trim().toLowerCase())
+      : [];
+    if (defaultSentinels.includes(requestedLower)) {
+      return { args: [], warnings: [] };
+    }
 
     // Open values: accept any model string
     if (values === 'open') {
@@ -1792,7 +1805,6 @@ function resolveModelArgs(agentName, requestedModel) {
 
     // Enumerated values: values is an object with cliValue keys
     if (values && typeof values === 'object') {
-      const requestedLower = String(requestedModel).toLowerCase();
       const matchedKey = Object.keys(values).find(k => k.toLowerCase() === requestedLower);
       if (matchedKey) {
         return { args: [flag, values[matchedKey].cliValue], warnings: [] };
@@ -1801,7 +1813,10 @@ function resolveModelArgs(agentName, requestedModel) {
       // declares passThrough (e.g. Claude's model values are pending verification).
       // Otherwise, reject with unknown_model_value.
       if (modelConfig.passThrough) {
-        return { args: [flag, String(requestedModel)], warnings: ['unverified_model_value'] };
+        return {
+          args: [flag, String(requestedModel)],
+          warnings: modelConfig.warnOnPassThrough === false ? [] : ['unverified_model_value']
+        };
       }
       return { args: [], warnings: ['unknown_model_value'] };
     }
@@ -1846,6 +1861,9 @@ function resolveEffortArgs(agentName, requestedModel, requestedEffort) {
     if (!isValid) {
       return { args: [], warnings: ['unknown_effort_value'] };
     }
+    if (effortConfig.configKey) {
+      return { args: [flag, `${effortConfig.configKey}="${String(requestedEffort)}"`], warnings: [] };
+    }
     return { args: [flag, String(requestedEffort)], warnings: [] };
   }
 
@@ -1856,6 +1874,9 @@ function resolveEffortArgs(agentName, requestedModel, requestedEffort) {
 
     if (!modelValues || typeof modelValues !== 'object') {
       // Cannot resolve model-dependent effort without model enum
+      if (effortConfig.passThrough && effortConfig.flag) {
+        return { args: [effortConfig.flag, String(requestedEffort)], warnings: [] };
+      }
       return { args: [], warnings: ['effort_not_automatable'] };
     }
 
@@ -1882,6 +1903,9 @@ function resolveEffortArgs(agentName, requestedModel, requestedEffort) {
     }
 
     if (!modelEntry) {
+      if (effortConfig.passThrough && effortConfig.flag) {
+        return { args: [effortConfig.flag, String(requestedEffort)], warnings: [] };
+      }
       return { args: [], warnings: ['effort_not_automatable'] };
     }
 
@@ -1889,8 +1913,12 @@ function resolveEffortArgs(agentName, requestedModel, requestedEffort) {
     const modelEfforts = modelEntry.efforts || [];
     const effortLower = String(requestedEffort).toLowerCase();
     const isValid = modelEfforts.some(e => String(e).toLowerCase() === effortLower);
+    const flag = effortConfig.flag;
 
     if (!isValid) {
+      if (effortConfig.passThrough && flag) {
+        return { args: [flag, String(requestedEffort)], warnings: [] };
+      }
       // Only report unsupported_effort_for_model when we matched a known model.
       // For unverified models, just say effort isn't automatable.
       if (matchedKnownModel) {
@@ -1899,7 +1927,10 @@ function resolveEffortArgs(agentName, requestedModel, requestedEffort) {
       return { args: [], warnings: ['effort_not_automatable'] };
     }
 
-    // Effort is valid for model but not automatable via CLI
+    if (flag) {
+      return { args: [flag, String(requestedEffort)], warnings: [] };
+    }
+
     return { args: [], warnings: ['effort_not_automatable'] };
   }
 
@@ -1908,6 +1939,92 @@ function resolveEffortArgs(agentName, requestedModel, requestedEffort) {
 }
 
 // ── Claude ────────────────────────────────────────────────────────────────────
+
+function resolveExtraOptionArgs(agentName, requestedOptions = {}) {
+  const config = getAdapterConfig(agentName);
+  const selection = config.selection || {};
+  const args = [];
+  const warnings = [];
+
+  Object.entries(selection).forEach(([key, optionConfig]) => {
+    if (key === 'model' || key === 'effort' || !optionConfig || typeof optionConfig !== 'object') {
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(requestedOptions, key)) {
+      return;
+    }
+
+    const rawValue = requestedOptions[key];
+    if (rawValue === null || rawValue === undefined || rawValue === '') {
+      return;
+    }
+
+    if (optionConfig.mode === 'unsupported') {
+      warnings.push(`unsupported_${key}_option`);
+      return;
+    }
+
+    if (optionConfig.mode === 'fixed') {
+      const fixedValue = optionConfig.fixedValue || '';
+      if (String(rawValue).toLowerCase() !== String(fixedValue).toLowerCase()) {
+        warnings.push(`fixed_${key}_only`);
+      }
+      return;
+    }
+
+    if (optionConfig.mode === 'boolean_flag') {
+      if (rawValue === true) {
+        args.push(optionConfig.flag || `--${key}`);
+      }
+      return;
+    }
+
+    if (optionConfig.mode === 'startup_flag') {
+      const flag = optionConfig.flag || `--${key}`;
+      const values = optionConfig.values;
+      if (Array.isArray(values)) {
+        const requestedLower = String(rawValue).toLowerCase();
+        const matchedEntry = values.find((entry) => {
+          const entryValue = typeof entry === 'string' ? entry : (entry && (entry.value || entry.id || entry.cliValue));
+          return String(entryValue || '').toLowerCase() === requestedLower;
+        });
+        if (matchedEntry) {
+          const cliValue = typeof matchedEntry === 'string'
+            ? matchedEntry
+            : (matchedEntry.cliValue || matchedEntry.value || matchedEntry.id);
+          args.push(flag, cliValue);
+          return;
+        }
+        if (!optionConfig.passThrough) {
+          warnings.push(`unknown_${key}_value`);
+          return;
+        }
+        args.push(flag, String(rawValue));
+        return;
+      }
+      if (values && values !== 'open' && typeof values === 'object') {
+        const requestedLower = String(rawValue).toLowerCase();
+        const matchedKey = Object.keys(values).find(k => k.toLowerCase() === requestedLower);
+        if (!matchedKey) {
+          if (optionConfig.passThrough) {
+            args.push(flag, String(rawValue));
+            return;
+          }
+          warnings.push(`unknown_${key}_value`);
+          return;
+        }
+        const cliValue = values[matchedKey] && values[matchedKey].cliValue
+          ? values[matchedKey].cliValue
+          : matchedKey;
+        args.push(flag, cliValue);
+        return;
+      }
+      args.push(flag, String(rawValue));
+    }
+  });
+
+  return { args, warnings };
+}
 
 function buildClaudePrimaryInvocation(command, options) {
   const writeModeArgs = resolveWriteModeArgs('claude', options.canWrite);
@@ -2112,7 +2229,7 @@ function buildCodexMinimalFallbackInvocation(entrypoint, options) {
   }
   const effortArgs = options.resolvedEffortArgs && options.resolvedEffortArgs.args || [];
   if (effortArgs.length > 0) {
-    capabilityDowngrades.push('effort selection (--reasoning-effort dropped in minimal fallback)');
+    capabilityDowngrades.push('effort selection (-c model_reasoning_effort dropped in minimal fallback)');
   }
   const writeModeArgs = resolveWriteModeArgs('codex', options.canWrite);
   if (writeModeArgs.length > 0) {
@@ -2192,9 +2309,18 @@ function buildKiloPreflightInvocation(command, options) {
 }
 
 function buildKiloPrimaryInvocation(command, options) {
+  const modelArgs = options.resolvedModelArgs && options.resolvedModelArgs.args || [];
+  const effortArgs = options.resolvedEffortArgs && options.resolvedEffortArgs.args || [];
+  const extraOptionArgs = options.resolvedExtraOptionArgs && options.resolvedExtraOptionArgs.args || [];
+  const autoArgs = options.canWrite === true ? ['--auto'] : [];
+  const displayArgs = [...modelArgs, ...effortArgs, ...extraOptionArgs, ...autoArgs];
+  const displayOptions = displayArgs.length > 0 ? `${displayArgs.join(' ')} ` : '';
   const args = [
     'run',
-    '--auto',
+    ...modelArgs,
+    ...effortArgs,
+    ...extraOptionArgs,
+    ...autoArgs,
     '--dir',
     options.cwd,
     options.prompt
@@ -2206,15 +2332,21 @@ function buildKiloPrimaryInvocation(command, options) {
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     env: process.env,
-    displayCommand: `${path.basename(command)} run --auto --dir ${options.cwd} [prompt]`,
+    displayCommand: `${path.basename(command)} run ${displayOptions}--dir ${options.cwd} [prompt]`,
     earlyExitClassifier: classifyKiloFatalOutput,
     warnings: options.warnings || []
   };
 }
 
 function buildKiloFallbackInvocation(command, options) {
+  const modelArgs = options.resolvedModelArgs && options.resolvedModelArgs.args || [];
+  const effortArgs = options.resolvedEffortArgs && options.resolvedEffortArgs.args || [];
+  const extraOptionArgs = options.resolvedExtraOptionArgs && options.resolvedExtraOptionArgs.args || [];
   const args = [
     'run',
+    ...modelArgs,
+    ...effortArgs,
+    ...extraOptionArgs,
     '--dir',
     options.cwd,
     options.prompt
@@ -2226,7 +2358,7 @@ function buildKiloFallbackInvocation(command, options) {
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     env: process.env,
-    displayCommand: `${path.basename(command)} run --dir ${options.cwd} [prompt]`,
+    displayCommand: `${path.basename(command)} run ${[...modelArgs, ...effortArgs, ...extraOptionArgs].join(' ')} --dir ${options.cwd} [prompt]`,
     earlyExitClassifier: classifyKiloFatalOutput,
     warnings: []
   };
@@ -2543,10 +2675,15 @@ function buildOpencodePreflightInvocation(command, options) {
 function buildOpencodeInvocation(command, options) {
   const mode = options.mode || 'plan';
   const useWriteAgent = mode === 'implement' && options.canWrite;
-  const writeModeArgs = resolveWriteModeArgs('opencode', useWriteAgent);
+  const explicitAgent = options.agentOptions && options.agentOptions.agent;
+  const writeModeArgs = explicitAgent ? [] : resolveWriteModeArgs('opencode', useWriteAgent);
+  const modelArgs = options.resolvedModelArgs && options.resolvedModelArgs.args || [];
+  const extraOptionArgs = options.resolvedExtraOptionArgs && options.resolvedExtraOptionArgs.args || [];
   const args = [
     'run',
     ...writeModeArgs,
+    ...modelArgs,
+    ...extraOptionArgs,
     options.prompt
   ];
 
@@ -2556,7 +2693,7 @@ function buildOpencodeInvocation(command, options) {
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     env: process.env,
-    displayCommand: `${path.basename(command)} run ${writeModeArgs.join(' ')} [prompt]`,
+    displayCommand: `${path.basename(command)} run ${[...writeModeArgs, ...modelArgs, ...extraOptionArgs].join(' ')} [prompt]`,
     earlyExitClassifier: classifyOpencodeFatalOutput,
     warnings: options.warnings || []
   };
@@ -2838,6 +2975,7 @@ module.exports = {
   getAdapterConfig,
   resolveModelArgs,
   resolveEffortArgs,
+  resolveExtraOptionArgs,
   resolveWriteModeArgs,
   formatAgentWarning,
   getCapabilityProfile,
@@ -2856,6 +2994,7 @@ module.exports = {
     normalizeDisplayText,
     resolveModelArgs,
     resolveEffortArgs,
+    resolveExtraOptionArgs,
     resolveWriteModeArgs,
     formatAgentWarning,
     classifyPreflightResult,

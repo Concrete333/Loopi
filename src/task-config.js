@@ -3,6 +3,7 @@ const path = require('path');
 const { loadUseCaseSync } = require('./use-case-loader');
 const { normalizeRetryPolicy } = require('./retry-policy');
 const { SUPPORTED_AGENTS, SUPPORTED_AGENT_SET } = require('./supported-agents');
+const { getAdapterConfig } = require('./adapters');
 const {
   CONTEXT_DELIVERY_STAGE_KEYS,
   CONTEXT_DELIVERY_DEFAULT_KEY,
@@ -552,10 +553,10 @@ function normalizeCanWritePolicy(agent, rawPolicy) {
   return canWrite;
 }
 
-// Normalizes optional per-agent runtime options (model, effort).
-// Shape: { [agent]: { model?: string|null, effort?: string|null } }
+// Normalizes optional per-agent runtime options declared by each adapter.
+// Shape: { [agent]: { [optionKey]: string|boolean|null } }
 // Keys are normalized to lowercase and must match an agent in the agents list.
-// Values are passed through to the adapter; no model-name validation yet.
+// Values are passed through to the adapter; no model-name validation happens here.
 function normalizeAgentOptions(rawTask, agents) {
   const rawOptions = rawTask.settings && rawTask.settings.agentOptions;
 
@@ -586,34 +587,66 @@ function normalizeAgentOptions(rawTask, agents) {
       throw new Error(`settings.agentOptions.${agentName} must be an object.`);
     }
 
-    // Reject unknown nested keys to catch typos early.
-    const allowedKeys = new Set(['model', 'effort']);
+    const allowedKeys = adapterAgentOptionKeys(lowerKey);
     const rawKeys = Object.keys(rawValue);
     const unknownKeys = rawKeys.filter(k => !allowedKeys.has(k));
     if (unknownKeys.length > 0) {
       throw new Error(
         `settings.agentOptions.${agentName} contains unknown key(s): ${unknownKeys.join(', ')}. ` +
-        `Allowed keys: model, effort.`
+        `Allowed keys: ${Array.from(allowedKeys).join(', ')}.`
       );
     }
 
-    const model = 'model' in rawValue ? rawValue.model : null;
-    const effort = 'effort' in rawValue ? rawValue.effort : null;
+    const adapterConfig = safeAdapterConfig(lowerKey);
+    const selection = adapterConfig && adapterConfig.selection ? adapterConfig.selection : {};
+    const normalizedValue = {};
+    for (const optionKey of allowedKeys) {
+      const optionConfig = selection[optionKey] || {};
+      const rawOption = Object.prototype.hasOwnProperty.call(rawValue, optionKey)
+        ? rawValue[optionKey]
+        : null;
 
-    if (model !== null && typeof model !== 'string') {
-      throw new Error(`settings.agentOptions.${agentName}.model must be a string or null.`);
-    }
-    if (effort !== null && typeof effort !== 'string') {
-      throw new Error(`settings.agentOptions.${agentName}.effort must be a string or null.`);
+      if (optionConfig.mode === 'boolean_flag') {
+        if (rawOption !== null && typeof rawOption !== 'boolean') {
+          throw new Error(`settings.agentOptions.${agentName}.${optionKey} must be a boolean or null.`);
+        }
+        if (rawOption === true || rawOption === false) {
+          normalizedValue[optionKey] = rawOption;
+        }
+        continue;
+      }
+
+      if (rawOption !== null && typeof rawOption !== 'string') {
+        throw new Error(`settings.agentOptions.${agentName}.${optionKey} must be a string or null.`);
+      }
+      if (typeof rawOption === 'string' && rawOption.trim().length > 0) {
+        normalizedValue[optionKey] = rawOption.trim();
+      } else if (optionKey === 'model' || optionKey === 'effort') {
+        normalizedValue[optionKey] = null;
+      }
     }
 
-    normalized[lowerKey] = {
-      model: typeof model === 'string' && model.length > 0 ? model : null,
-      effort: typeof effort === 'string' && effort.length > 0 ? effort : null
-    };
+    normalized[lowerKey] = normalizedValue;
   }
 
   return normalized;
+}
+
+function safeAdapterConfig(agentName) {
+  try {
+    return getAdapterConfig(agentName);
+  } catch {
+    return null;
+  }
+}
+
+function adapterAgentOptionKeys(agentName) {
+  const config = safeAdapterConfig(agentName);
+  const keys = new Set(['model', 'effort']);
+  if (config && config.selection && typeof config.selection === 'object') {
+    Object.keys(config.selection).forEach((key) => keys.add(key));
+  }
+  return keys;
 }
 
 function normalizeOneShotOrigins(rawTask, agents) {

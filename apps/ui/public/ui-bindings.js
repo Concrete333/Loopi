@@ -153,6 +153,14 @@
       document.querySelectorAll('[data-agent-toggle]').forEach((input) => {
         input.addEventListener('change', () => {
           toggleAgent(input.getAttribute('data-agent-toggle'), input.checked);
+          if (input.checked && actions && typeof actions.refreshAdapterOptions === 'function') {
+            actions.refreshAdapterOptions({ refresh: false })
+              .then(render)
+              .catch((error) => {
+                state.lastActionError = error && error.message ? error.message : 'Adapter option discovery failed.';
+                render();
+              });
+          }
         });
       });
 
@@ -271,26 +279,33 @@
           const parts = input.getAttribute('data-agent-option').split(':');
           const agentId = parts[0];
           const field = parts[1];
+          const optionType = input.getAttribute('data-agent-option-type');
           mutateDraft((draft) => {
             draft.settings.agentOptions[agentId] = draft.settings.agentOptions[agentId] || {};
             if (!input.value) {
               delete draft.settings.agentOptions[agentId][field];
+            } else if (optionType === 'boolean') {
+              draft.settings.agentOptions[agentId][field] = input.value === 'true';
             } else {
               draft.settings.agentOptions[agentId][field] = input.value;
             }
-          }, { renderNow: false });
+          }, { renderNow: field === 'model' });
         });
       });
+
+      const refreshAdapterOptionsButton = document.getElementById('refresh-adapter-options');
+      if (refreshAdapterOptionsButton) {
+        refreshAdapterOptionsButton.addEventListener('click', async () => actions.performAction(async () => {
+          await actions.refreshAdapterOptions({ refresh: true });
+          state.lastActionMessage = 'Adapter model lists refreshed where the installed CLIs support discovery.';
+        }, { pending: 'adapterOptions' }));
+      }
 
       document.querySelectorAll('[data-agent-policy]').forEach((input) => {
         input.addEventListener('change', () => {
           const agentId = input.getAttribute('data-agent-policy');
           mutateDraft((draft) => {
-            if (!input.value) {
-              delete draft.settings.agentPolicies[agentId];
-            } else {
-              draft.settings.agentPolicies[agentId] = { canWrite: input.value === 'true' };
-            }
+            draft.settings.agentPolicies[agentId] = { canWrite: input.value === 'true' };
           }, { renderNow: false });
         });
       });

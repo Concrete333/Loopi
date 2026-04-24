@@ -144,6 +144,23 @@ test('bootstrap endpoint returns project metadata and use cases', async () => {
     assert.strictEqual(response.body.data.projectRoot, projectRoot);
     assert.ok(Array.isArray(response.body.data.useCases));
     assert.ok(Array.isArray(response.body.data.adapterMetadata));
+    assert.ok(Array.isArray(response.body.data.adapterOptions));
+  } finally {
+    await new Promise((resolve) => started.server.close(resolve));
+    cleanupProjectRoot(projectRoot);
+  }
+});
+
+test('adapter options endpoint returns adapter-specific selection schemas', async () => {
+  const projectRoot = createProjectRoot();
+  const started = await startControlPlaneServer({ projectRoot, port: 0 });
+  try {
+    const response = await requestJson(started.url, 'GET', '/api/adapters/options');
+    assert.strictEqual(response.statusCode, 200);
+    assert.strictEqual(response.body.ok, true);
+    const kiloOptions = response.body.data.find((entry) => entry.agentId === 'kilo');
+    assert.ok(kiloOptions, 'kilo options should be included');
+    assert.strictEqual(kiloOptions.schema.options.model.discovery.command, 'models');
   } finally {
     await new Promise((resolve) => started.server.close(resolve));
     cleanupProjectRoot(projectRoot);

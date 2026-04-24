@@ -90,7 +90,7 @@ function validateProviderAssignments(config) {
     );
   }
 
-  // CLI adapters (gemini, kilo, etc.) may have supportsWriteAccess: false in their
+  // Some CLI adapters may have supportsWriteAccess: false in their
   // capability profiles, but they are not blocked here. They can be used as implement
   // origin if configured, allowing the user to decide.
 }
@@ -2174,7 +2174,8 @@ class LoopiOrchestrator {
         canWrite: Boolean(executionPolicy && executionPolicy.canWrite),
         mode,
         model: (agentOpts && agentOpts.model) || null,
-        effort: (agentOpts && agentOpts.effort) || null
+        effort: (agentOpts && agentOpts.effort) || null,
+        agentOptions: agentOpts || {}
       });
     }
 

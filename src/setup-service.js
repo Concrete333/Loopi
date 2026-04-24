@@ -1,5 +1,8 @@
 const { spawn } = require('child_process');
-const { getAdapter } = require('./adapters');
+const fs = require('fs').promises;
+const os = require('os');
+const path = require('path');
+const { getAdapter, getAdapterConfig } = require('./adapters');
 
 // ── Structured Adapter Metadata Registry ────────────────────────────────────────
 
@@ -67,8 +70,9 @@ const ADAPTER_METADATA = {
     },
     envOverride: 'LOOPI_GEMINI_JS',
     family: 'cli',
-    supportsWriteAccess: false,
-    supportsReasoningEffort: false
+    supportsWriteAccess: true,
+    supportsReasoningEffort: true,
+    supportsThinking: true
   },
   kilo: {
     id: 'kilo',
@@ -447,6 +451,609 @@ function cloneMetadata(metadata) {
   };
 }
 
+function cloneOptionSchema(schema) {
+  return JSON.parse(JSON.stringify(schema || {}));
+}
+
+function adapterSelectionToOptionSchema(agentName) {
+  const normalized = String(agentName || '').trim().toLowerCase();
+  let config;
+  try {
+    config = getAdapterConfig(normalized);
+  } catch {
+    return null;
+  }
+
+  const selection = config.selection || {};
+  const options = {};
+  Object.entries(selection).forEach(([key, optionConfig]) => {
+    if (!optionConfig || typeof optionConfig !== 'object') {
+      return;
+    }
+    options[key] = describeSelectionOption(key, optionConfig);
+  });
+
+  return {
+    agentId: normalized,
+    options
+  };
+}
+
+function describeSelectionOption(key, optionConfig) {
+  const values = optionConfig.values;
+  const enumValues = normalizeSelectionValues(values);
+
+  let kind = optionConfig.mode || 'unsupported';
+  if (optionConfig.mode === 'startup_flag') {
+    kind = enumValues.length > 0 ? 'enum' : 'open';
+  }
+  if (optionConfig.mode === 'boolean_flag') {
+    kind = 'boolean';
+  }
+
+  return {
+    key,
+    label: optionConfig.label || titleCaseOptionKey(key),
+    mode: optionConfig.mode || 'unsupported',
+    kind,
+    flag: optionConfig.flag || null,
+    configKey: optionConfig.configKey || null,
+    fixedValue: optionConfig.fixedValue || null,
+    defaultValue: optionConfig.defaultValue || null,
+    defaultSentinelValues: Array.isArray(optionConfig.defaultSentinelValues)
+      ? [...optionConfig.defaultSentinelValues]
+      : [],
+    defaultOptionMode: optionConfig.defaultOptionMode || null,
+    modelDependent: Boolean(optionConfig.modelDependent),
+    allowCustom: values === 'open' || Boolean(optionConfig.passThrough),
+    renderMode: optionConfig.renderMode || null,
+    values: enumValues,
+    discovery: optionConfig.discovery ? { ...optionConfig.discovery } : null
+  };
+}
+
+function normalizeSelectionValues(values) {
+  if (!values || values === 'open') {
+    return [];
+  }
+  if (Array.isArray(values)) {
+    return values.map((entry) => {
+      if (typeof entry === 'string') {
+        return {
+          value: entry,
+          label: entry,
+          cliValue: entry,
+          efforts: []
+        };
+      }
+      const value = entry && (entry.value || entry.id || entry.cliValue);
+      return {
+        value,
+        label: entry && entry.label ? entry.label : value,
+        cliValue: entry && entry.cliValue ? entry.cliValue : value,
+        efforts: entry && Array.isArray(entry.efforts) ? [...entry.efforts] : [],
+        supportsThinking: Boolean(entry && entry.supportsThinking)
+      };
+    }).filter((entry) => entry.value);
+  }
+  if (typeof values === 'object') {
+    return Object.entries(values).map(([value, entry]) => ({
+      value,
+      label: entry && entry.label ? entry.label : value,
+      cliValue: entry && entry.cliValue ? entry.cliValue : value,
+      efforts: entry && Array.isArray(entry.efforts) ? [...entry.efforts] : [],
+      supportsThinking: Boolean(entry && entry.supportsThinking)
+    }));
+  }
+  return [];
+}
+
+function titleCaseOptionKey(key) {
+  return String(key || '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function getAdapterOptionMetadata(agentName) {
+  const normalized = String(agentName || '').trim().toLowerCase();
+  const metadata = getAdapterMetadata(normalized);
+  if (!metadata) {
+    return null;
+  }
+  return {
+    agentId: normalized,
+    displayName: metadata.displayName,
+    schema: adapterSelectionToOptionSchema(normalized)
+  };
+}
+
+function getAllAdapterOptionMetadata() {
+  return getSupportedAgentIds()
+    .map((agentId) => getAdapterOptionMetadata(agentId))
+    .filter(Boolean)
+    .map(cloneOptionSchema);
+}
+
+function stripAnsi(text) {
+  return String(text || '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
+}
+
+function parseCliModelList(outputText) {
+  const text = stripAnsi(outputText);
+  const found = new Map();
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    const lineMatch = line.match(/^([a-z0-9_.-]+\/[A-Za-z0-9_.:@/+*-]+)$/);
+    if (!lineMatch) {
+      continue;
+    }
+    const id = lineMatch[1];
+    const modelInfo = parseJsonBlockAfterLine(lines, index + 1);
+    const variantKeys = modelInfo && modelInfo.value && modelInfo.value.variants
+      && typeof modelInfo.value.variants === 'object'
+      ? Object.keys(modelInfo.value.variants)
+      : [];
+    const efforts = variantKeys.filter(isReasoningEffortVariant);
+    const supportsThinking = modelInfo ? modelMetadataSupportsThinkingToggle(modelInfo.value, efforts) : false;
+    const label = modelInfo && modelInfo.value && modelInfo.value.name
+      ? `${id} (${modelInfo.value.name})`
+      : id;
+    found.set(id, {
+      id,
+      label,
+      efforts,
+      supportsThinking
+    });
+    if (modelInfo) {
+      index = modelInfo.endIndex;
+    }
+  }
+
+  const modelPattern = /(^|[\s"'`])([a-z0-9_.-]+\/[A-Za-z0-9_.:@/+*-]+)(?=$|[\s"',`])/g;
+  let match;
+  while ((match = modelPattern.exec(text)) !== null) {
+    const id = match[2];
+    if (/^https?:\/\//i.test(id)) {
+      continue;
+    }
+    if (!found.has(id)) {
+      found.set(id, { id, label: id, efforts: [], supportsThinking: false });
+    }
+  }
+  return Array.from(found.values());
+}
+
+const REASONING_EFFORT_VARIANTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+const THINKING_TOGGLE_VARIANTS = new Set([
+  'thinking',
+  'think',
+  'reasoning',
+  'enabled',
+  'enable',
+  'on',
+  'disabled',
+  'disable',
+  'off',
+  'none',
+  'no-thinking',
+  'non-thinking',
+  'without-thinking',
+  'standard',
+  'default'
+]);
+
+function isReasoningEffortVariant(value) {
+  return REASONING_EFFORT_VARIANTS.has(String(value || '').trim().toLowerCase());
+}
+
+function isThinkingToggleVariant(value) {
+  return THINKING_TOGGLE_VARIANTS.has(String(value || '').trim().toLowerCase());
+}
+
+function modelMetadataSupportsThinkingToggle(value, efforts = []) {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  if (Array.isArray(efforts) && efforts.length > 0) {
+    return false;
+  }
+  if (value.capabilities && value.capabilities.reasoning === true) {
+    return true;
+  }
+  const variants = value.variants && typeof value.variants === 'object' ? Object.keys(value.variants) : [];
+  if (variants.some(isThinkingToggleVariant)) {
+    return true;
+  }
+  return modelMetadataMentionsThinking(value);
+}
+
+function modelMetadataMentionsThinking(value) {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  for (const [key, entry] of Object.entries(value)) {
+    const normalizedKey = String(key || '').toLowerCase();
+    if (
+      normalizedKey === 'supportsthinking'
+      || normalizedKey === 'canthink'
+      || normalizedKey === 'thinking'
+      || normalizedKey === 'includethoughts'
+    ) {
+      if (entry === true || (entry && typeof entry === 'object')) {
+        return true;
+      }
+    }
+    if (normalizedKey === 'thinkingconfig' && entry && typeof entry === 'object') {
+      return true;
+    }
+    if (entry && typeof entry === 'object' && modelMetadataMentionsThinking(entry)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function parseJsonBlockAfterLine(lines, startIndex) {
+  let firstJsonLine = -1;
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed.startsWith('{')) {
+      firstJsonLine = index;
+    }
+    break;
+  }
+  if (firstJsonLine < 0) {
+    return null;
+  }
+
+  const collected = [];
+  let depth = 0;
+  let seenBrace = false;
+  for (let index = firstJsonLine; index < lines.length; index += 1) {
+    const line = lines[index];
+    collected.push(line);
+    for (const char of line) {
+      if (char === '{') {
+        depth += 1;
+        seenBrace = true;
+      } else if (char === '}') {
+        depth -= 1;
+      }
+    }
+    if (seenBrace && depth === 0) {
+      try {
+        return {
+          value: JSON.parse(collected.join('\n')),
+          endIndex: index
+        };
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+async function discoverAdapterOptions(agentName, {
+  cwd,
+  timeoutMs = 15000,
+  refresh = false,
+  commandRunner = defaultCommandRunner
+} = {}) {
+  const normalized = String(agentName || '').trim().toLowerCase();
+  const metadata = getAdapterMetadata(normalized);
+  if (!metadata) {
+    return {
+      agentId: normalized,
+      status: 'unavailable',
+      options: {},
+      error: `Unknown agent "${normalized}"`
+    };
+  }
+
+  const schema = adapterSelectionToOptionSchema(normalized);
+  const options = {};
+  if (!schema || !schema.options) {
+    return {
+      agentId: normalized,
+      status: 'unavailable',
+      options,
+      error: 'No adapter option schema is available.'
+    };
+  }
+
+  await Promise.all(Object.entries(schema.options).map(async ([key, optionSchema]) => {
+    if (!optionSchema.discovery) {
+      return;
+    }
+    if (optionSchema.discovery.type === 'codex-config') {
+      const models = await discoverCodexConfigModels();
+      options[key] = {
+        status: models.length > 0 ? 'ready' : 'empty',
+        values: models,
+        exitCode: 0,
+        error: models.length > 0 ? null : 'No local Codex model settings were found.'
+      };
+      return;
+    }
+    if (optionSchema.discovery.type === 'claude-bundle-model-options') {
+      let resolvedPath;
+      try {
+        resolvedPath = getAdapter(normalized).resolve();
+      } catch (error) {
+        options[key] = {
+          status: 'unavailable',
+          values: [],
+          exitCode: null,
+          error: error.message || String(error)
+        };
+        return;
+      }
+
+      try {
+        const discovery = await discoverClaudeBundleModelOptions(resolvedPath);
+        options[key] = {
+          status: discovery.values.length > 0 ? 'ready' : 'empty',
+          values: discovery.values,
+          defaultOption: discovery.defaultOption,
+          exitCode: 0,
+          error: discovery.values.length > 0 ? null : 'Claude Code bundle did not expose model picker options.'
+        };
+      } catch (error) {
+        options[key] = {
+          status: 'unavailable',
+          values: [],
+          exitCode: null,
+          error: error.message || String(error)
+        };
+      }
+      return;
+    }
+    if (optionSchema.discovery.type !== 'cli' || optionSchema.discovery.command !== 'models') {
+      return;
+    }
+
+    let resolvedPath;
+    try {
+      resolvedPath = getAdapter(normalized).resolve();
+    } catch (error) {
+      options[key] = {
+        status: 'unavailable',
+        values: [],
+        exitCode: null,
+        error: error.message || String(error)
+      };
+      return;
+    }
+
+    const args = ['models'];
+    if (optionSchema.discovery.verbose) {
+      args.push('--verbose');
+    }
+    if (refresh) {
+      args.push('--refresh');
+    }
+
+    const discoveryCommands = [resolvedPath];
+    if (process.platform === 'win32') {
+      discoveryCommands.push(`${normalized}.cmd`, normalized);
+    }
+
+    let lastDiscoveryResult = null;
+    for (const command of [...new Set(discoveryCommands.filter(Boolean))]) {
+      try {
+        const result = await commandRunner({
+          command,
+          args,
+          cwd: cwd || process.cwd(),
+          timeoutMs
+        });
+        const combinedOutput = `${result.stdout || ''}\n${result.stderr || ''}`;
+        const models = parseCliModelList(combinedOutput);
+        lastDiscoveryResult = {
+          status: models.length > 0 ? 'ready' : 'empty',
+          values: models,
+          exitCode: result.exitCode,
+          error: models.length > 0 ? null : summarizeDiscoveryFailure(combinedOutput, result.exitCode)
+        };
+        if (models.length > 0) {
+          options[key] = lastDiscoveryResult;
+          return;
+        }
+      } catch (error) {
+        lastDiscoveryResult = {
+          status: 'unavailable',
+          values: [],
+          exitCode: null,
+          error: error.message || String(error)
+        };
+      }
+    }
+    options[key] = lastDiscoveryResult || {
+      status: 'empty',
+      values: [],
+      exitCode: 0,
+      error: 'No models were returned by the CLI.'
+    };
+  }));
+
+  const discoveredEntries = Object.values(options);
+  const readyCount = discoveredEntries.filter((entry) => entry.status === 'ready').length;
+  return {
+    agentId: normalized,
+    status: readyCount > 0 ? 'ready' : (discoveredEntries.length > 0 ? 'unavailable' : 'not-supported'),
+    options
+  };
+}
+
+async function discoverCodexConfigModels() {
+  const paths = [
+    path.join(os.homedir(), '.codex', 'config.toml'),
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'codex', 'config.toml') : null
+  ].filter(Boolean);
+  const found = new Map();
+  for (const filePath of paths) {
+    let content = '';
+    try {
+      content = await fs.readFile(filePath, 'utf8');
+    } catch {
+      continue;
+    }
+    const modelMatch = content.match(/^\s*model\s*=\s*"([^"]+)"/m);
+    if (modelMatch && modelMatch[1]) {
+      found.set(modelMatch[1], {
+        id: modelMatch[1],
+        label: `${modelMatch[1]} (local default)`
+      });
+    }
+    const migrationPattern = /^\s*"([^"]+)"\s*=\s*"([^"]+)"\s*$/gm;
+    let match;
+    while ((match = migrationPattern.exec(content)) !== null) {
+      found.set(match[1], { id: match[1], label: match[1] });
+      found.set(match[2], { id: match[2], label: match[2] });
+    }
+  }
+  return Array.from(found.values());
+}
+
+async function discoverClaudeBundleModelOptions(resolvedPath) {
+  const buffer = await fs.readFile(resolvedPath);
+  return parseClaudeBundleModelOptions(buffer);
+}
+
+function parseClaudeBundleModelOptions(input) {
+  const buffer = Buffer.isBuffer(input) ? input : Buffer.from(String(input || ''), 'utf8');
+  const text = claudeBundleModelWindow(buffer);
+  const values = parseClaudeBundleModelValues(text);
+  const defaultOption = /value:null,label:"Default/.test(text)
+    || /formatOnRead:\([^)]*\)=>[^?]*\?["']default["']/.test(text);
+  return {
+    values,
+    defaultOption: defaultOption ? { label: 'Default' } : null
+  };
+}
+
+function claudeBundleModelWindow(buffer) {
+  const markers = [
+    'ANTHROPIC_CUSTOM_MODEL_OPTION',
+    'getOptions:()=>{try{return',
+    'availableModels:N.array'
+  ];
+  const markerIndexes = markers
+    .map((marker) => buffer.indexOf(Buffer.from(marker, 'utf8')))
+    .filter((index) => index >= 0);
+  if (markerIndexes.length === 0) {
+    return buffer.toString('utf8');
+  }
+  const start = Math.max(0, Math.min(...markerIndexes) - 30000);
+  const end = Math.min(buffer.length, Math.max(...markerIndexes) + 30000);
+  return buffer.subarray(start, end).toString('utf8');
+}
+
+function parseClaudeBundleModelValues(text) {
+  const found = new Map();
+  const explicitOptions = text.match(/getOptions:\(\)=>\{try\{return[^}]*?\}catch\{return\[((?:"[^"]+"\s*,?\s*)+)\]\}\}/);
+  if (explicitOptions && explicitOptions[1]) {
+    safeParseStringArray(`[${explicitOptions[1]}]`).forEach((value) => {
+      addClaudeBundleModelValue(found, text, value);
+    });
+  }
+
+  if (found.size === 0) {
+    const modelFamilies = text.match(/\b[A-Za-z0-9_$]+\s*=\s*\[((?:"(?:sonnet|opus|haiku)"\s*,?\s*)+)\]/);
+    if (modelFamilies && modelFamilies[1]) {
+      safeParseStringArray(`[${modelFamilies[1]}]`).forEach((value) => {
+        addClaudeBundleModelValue(found, text, value);
+      });
+    }
+  }
+
+  const customModel = process.env.ANTHROPIC_CUSTOM_MODEL_OPTION;
+  if (customModel && !found.has(customModel)) {
+    found.set(customModel, {
+      id: customModel,
+      value: customModel,
+      label: process.env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME || customModel
+    });
+  }
+
+  return Array.from(found.values());
+}
+
+function safeParseStringArray(text) {
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed)
+      ? parsed.filter((value) => typeof value === 'string' && value.trim()).map((value) => value.trim())
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function addClaudeBundleModelValue(found, text, rawValue) {
+  const value = String(rawValue || '').trim();
+  if (!value || value.toLowerCase() === 'default' || found.has(value)) {
+    return;
+  }
+  found.set(value, {
+    id: value,
+    value,
+    label: findClaudeBundleModelLabel(text, value) || titleCaseOptionKey(value)
+  });
+}
+
+function findClaudeBundleModelLabel(text, value) {
+  const escaped = escapeRegExp(value);
+  const direct = text.match(new RegExp(`value:"${escaped}",label:"([^"]+)"`));
+  if (direct && direct[1]) {
+    return direct[1];
+  }
+  const family = String(value).replace(/\[1m\]$/i, '');
+  const fallback = text.match(new RegExp(`\\b${escapeRegExp(family)}:"([^"]+)"`));
+  if (fallback && fallback[1]) {
+    return fallback[1];
+  }
+  return null;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function discoverAllAdapterOptions(agentIds, options = {}) {
+  const ids = Array.isArray(agentIds) && agentIds.length > 0
+    ? agentIds
+    : getSupportedAgentIds();
+  const results = await Promise.all(ids.map((agentId) => discoverAdapterOptions(agentId, options)));
+  return results.reduce((acc, result) => {
+    acc[result.agentId] = result;
+    return acc;
+  }, {});
+}
+
+function summarizeDiscoveryFailure(outputText, exitCode) {
+  const text = stripAnsi(outputText)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' ');
+  if (text) {
+    return text;
+  }
+  return exitCode === 0
+    ? 'No models were returned by the CLI.'
+    : `Model discovery exited with code ${exitCode}.`;
+}
+
 function createUnknownAgentActionResult(agentId, actionType) {
   return {
     success: false,
@@ -810,6 +1417,10 @@ module.exports = {
   STATUS,
   getAdapterMetadata,
   getAllAdapterMetadata,
+  getAdapterOptionMetadata,
+  getAllAdapterOptionMetadata,
+  discoverAdapterOptions,
+  discoverAllAdapterOptions,
   getSupportedAgentIds,
   checkAdapterStatus,
   checkAllAdapterStatus,
@@ -822,6 +1433,10 @@ module.exports = {
   ADAPTER_METADATA,
   __test: {
     cloneMetadata,
+    adapterSelectionToOptionSchema,
+    parseCliModelList,
+    parseClaudeBundleModelOptions,
+    discoverAdapterOptions,
     buildInstallInvocation,
     buildWindowsInteractiveLaunchScript,
     shouldUseShellForCommand,
