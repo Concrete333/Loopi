@@ -260,6 +260,64 @@ module.exports = async function registerRoleTests(test) {
     }
   });
 
+  await test('roles.fallback does not replace a failed write step with an HTTP provider', async () => {
+    const orchestrator = new LoopiOrchestrator();
+    const { port: primaryPort, close: closePrimary } = await startMockHttpServer(500, { error: 'primary down' });
+    const { port: fallbackPort, close: closeFallback } = await startMockHttpServer(200, {
+      choices: [{ message: { content: 'fallback should not run' } }],
+      model: 'fallback-model'
+    });
+
+    try {
+      const config = normalizeTaskConfig({
+        mode: 'implement',
+        prompt: 'Test prompt',
+        agents: ['claude', 'nim-primary', 'nim-fallback'],
+        roles: {
+          fallback: 'nim-fallback'
+        },
+        providers: {
+          'nim-primary': {
+            type: 'openai-compatible',
+            baseUrl: `http://127.0.0.1:${primaryPort}/v1`,
+            model: 'primary-model'
+          },
+          'nim-fallback': {
+            type: 'openai-compatible',
+            baseUrl: `http://127.0.0.1:${fallbackPort}/v1`,
+            model: 'fallback-model'
+          }
+        },
+        settings: { cwd: '.', timeoutMs: 10000, qualityLoops: 1 }
+      }, { projectRoot: PROJECT_ROOT });
+
+      const run = orchestrator.createRun(config);
+      const step = await orchestrator.runStep({
+        run,
+        config,
+        stage: 'implement',
+        agent: 'nim-primary',
+        prompt: 'Implement with writes',
+        cycleNumber: null,
+        mode: 'implement',
+        executionPolicy: { canWrite: true },
+        handoffSchema: 'implement'
+      });
+
+      assert.strictEqual(step.agent, 'nim-primary', 'HTTP fallback should not replace the failed write step');
+      assert.strictEqual(step.ok, false);
+      assert.strictEqual(run.steps.length, 1, 'fallback should not consume a second step id');
+      assert.ok(
+        step.warnings.some((warning) => /Role fallback not scheduled/i.test(warning)
+          && /cannot inherit write access/i.test(warning)),
+        'write-incompatible fallback should be recorded as a warning'
+      );
+    } finally {
+      await closePrimary();
+      await closeFallback();
+    }
+  });
+
   await test('parallel review steps reserve unique step ids', async () => {
     const orchestrator = new LoopiOrchestrator();
     const { port: originPort, close: closeOrigin } = await startSequentialMockHttpServer([

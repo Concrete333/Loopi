@@ -95,6 +95,20 @@ function validateProviderAssignments(config) {
   // origin if configured, allowing the user to decide.
 }
 
+function getRoleFallbackBlockReason(config, fallbackAgent, executionPolicy) {
+  const stepCanWrite = Boolean(executionPolicy && executionPolicy.canWrite);
+  if (!stepCanWrite) {
+    return null;
+  }
+
+  const providerConfig = getProviderConfig(config, fallbackAgent);
+  if (providerConfig && providerConfig.type === 'openai-compatible') {
+    return `roles.fallback="${fallbackAgent}" is an HTTP provider, so it cannot inherit write access for this failed step.`;
+  }
+
+  return null;
+}
+
 function fallbackReasonLabel(reason) {
   const reasonLabels = {
     empty_output: 'primary invocation returned empty output',
@@ -484,6 +498,21 @@ function getEffectiveAgentsForMode(config, submode) {
   }
   const remaining = config.agents.filter((a) => a !== originAgent);
   return [originAgent, ...remaining];
+}
+
+function renderOneShotUnitResultSummary(unitResults) {
+  if (!Array.isArray(unitResults) || unitResults.length === 0) {
+    return '';
+  }
+
+  return unitResults.map((entry, index) => {
+    const lines = [
+      `Unit ${index + 1}: ${entry.id} - ${entry.title}`,
+      entry.output ? `Output:\n${entry.output}` : null,
+      entry.handoffText ? `Handoff:\n${entry.handoffText}` : null
+    ].filter(Boolean);
+    return lines.join('\n');
+  }).join('\n\n');
 }
 
 // Returns a Set of coarse 50-char lowercase keys representing the findings in a review history entry.
@@ -1903,10 +1932,8 @@ class LoopiOrchestrator {
     const loopCount = config.settings.sectionImplementLoops;
 
     // Track state across units
-    let finalOutput = null;
-    let finalHandoffText = null;
-    let finalHandoffData = null;
     const completedUnits = [];
+    const completedUnitResults = [];
 
     for (let i = 0; i < units.length; i += 1) {
       const unit = units[i];
@@ -1954,11 +1981,14 @@ class LoopiOrchestrator {
 
         // Track this unit as completed for the next unit's context
         completedUnits.push(unit);
-
-        // Update final state from this unit's result
-        finalOutput = unitResult.finalOutput;
-        finalHandoffText = unitResult.finalHandoffText;
-        finalHandoffData = unitResult.finalHandoffData;
+        completedUnitResults.push({
+          id: unit.id,
+          title: unit.title,
+          unit_kind: handoffData.unit_kind,
+          output: unitResult.finalOutput || '',
+          handoffText: unitResult.finalHandoffText || '',
+          handoffData: unitResult.finalHandoffData || null
+        });
 
       } catch (error) {
         // Re-throw the inner error directly — the inner throw already produced
@@ -1966,6 +1996,18 @@ class LoopiOrchestrator {
         throw error;
       }
     }
+
+    const finalOutput = renderOneShotUnitResultSummary(completedUnitResults);
+    const finalHandoffText = finalOutput;
+    const nonDoneStatus = completedUnitResults
+      .map((entry) => entry.handoffData && entry.handoffData.status)
+      .find((status) => status && status !== 'DONE');
+    const finalHandoffData = {
+      status: nonDoneStatus || 'DONE',
+      summary: `Completed ${completedUnitResults.length} ${handoffData.unit_kind} unit(s).`,
+      unit_kind: handoffData.unit_kind,
+      units: completedUnitResults
+    };
 
     return {
       finalOutput,
@@ -2238,10 +2280,19 @@ class LoopiOrchestrator {
     if (!result.ok && allowRoleFallback) {
       fallbackAgent = getRoleAssignment(config, 'fallback');
       if (fallbackAgent && fallbackAgent !== agent) {
-        step.warnings = [
-          ...(step.warnings || []),
-          `Role fallback scheduled from ${agent} to ${fallbackAgent}`
-        ];
+        const fallbackBlockReason = getRoleFallbackBlockReason(config, fallbackAgent, executionPolicy);
+        if (fallbackBlockReason) {
+          step.warnings = [
+            ...(step.warnings || []),
+            `Role fallback not scheduled from ${agent} to ${fallbackAgent}: ${fallbackBlockReason}`
+          ];
+          fallbackAgent = null;
+        } else {
+          step.warnings = [
+            ...(step.warnings || []),
+            `Role fallback scheduled from ${agent} to ${fallbackAgent}`
+          ];
+        }
       } else {
         fallbackAgent = null;
       }

@@ -86,6 +86,16 @@ async function testGetAllAdapterOptionMetadata() {
     'high',
     'xhigh'
   ]);
+
+  const opencodeOptions = allOptions.find((entry) => entry.agentId === 'opencode');
+  assert.ok(opencodeOptions, 'opencode option metadata exists');
+  assert.strictEqual(opencodeOptions.schema.options.model.discovery.command, 'models');
+  assert.strictEqual(opencodeOptions.schema.options.model.discovery.verbose, true);
+  assert.strictEqual(opencodeOptions.schema.options.effort.mode, 'model_dependent');
+  assert.strictEqual(opencodeOptions.schema.options.effort.flag, '--variant');
+  assert.strictEqual(opencodeOptions.schema.options.agent.discovery.command, 'agents');
+  assert.strictEqual(opencodeOptions.schema.options.showThinking.kind, 'boolean');
+  assert.strictEqual(opencodeOptions.schema.options.showThinking.flag, '--thinking');
 }
 
 async function testParseClaudeBundleModelOptions() {
@@ -183,6 +193,79 @@ async function testParseCliModelListTreatsReasoningWithoutEffortAsThinkingToggle
   assert.ok(haiku, 'verbose Kilo Claude Haiku entry should be parsed');
   assert.deepStrictEqual(haiku.efforts, []);
   assert.strictEqual(haiku.supportsThinking, true);
+}
+
+async function testParseCliAgentList() {
+  const { __test } = require('../src/setup-service');
+
+  const agents = __test.parseCliAgentList([
+    'build (primary)',
+    '  [{ "permission": "*", "action": "allow", "pattern": "*" }]',
+    'explore (subagent)',
+    '  [{ "permission": "read", "action": "allow", "pattern": "*" }]',
+    'plan (primary)'
+  ].join('\n'));
+
+  assert.deepStrictEqual(agents.map((agent) => agent.value), ['build', 'explore', 'plan']);
+  assert.deepStrictEqual(agents.map((agent) => agent.label), [
+    'build (primary)',
+    'explore (subagent)',
+    'plan (primary)'
+  ]);
+}
+
+async function testDiscoverOpencodeOptionsUsesCliModelsAndAgents() {
+  const { discoverAdapterOptions } = require('../src/setup-service');
+
+  const previousPath = process.env.LOOPI_OPENCODE_PATH;
+  process.env.LOOPI_OPENCODE_PATH = process.execPath;
+  try {
+    const calls = [];
+    const result = await discoverAdapterOptions('opencode', {
+      commandRunner: async (invocation) => {
+        calls.push(invocation.args.join(' '));
+        if (invocation.args.join(' ') === 'models --verbose') {
+          return {
+            exitCode: 0,
+            stdout: [
+              'opencode/claude-haiku-4-5',
+              '{',
+              '  "id": "claude-haiku-4-5",',
+              '  "providerID": "opencode",',
+              '  "name": "Claude Haiku 4.5",',
+              '  "capabilities": { "reasoning": true },',
+              '  "variants": {',
+              '    "high": { "thinking": { "type": "enabled" } },',
+              '    "max": { "thinking": { "type": "enabled" } }',
+              '  }',
+              '}'
+            ].join('\n'),
+            stderr: ''
+          };
+        }
+        if (invocation.args.join(' ') === 'agent list') {
+          return {
+            exitCode: 0,
+            stdout: 'build (primary)\nplan (primary)\nexplore (subagent)\n',
+            stderr: ''
+          };
+        }
+        throw new Error(`unexpected discovery args: ${invocation.args.join(' ')}`);
+      }
+    });
+
+    assert.deepStrictEqual(calls.sort(), ['agent list', 'models --verbose']);
+    assert.strictEqual(result.options.model.status, 'ready');
+    assert.deepStrictEqual(result.options.model.values[0].efforts, ['high', 'max']);
+    assert.strictEqual(result.options.agent.status, 'ready');
+    assert.deepStrictEqual(result.options.agent.values.map((entry) => entry.value), ['build', 'plan', 'explore']);
+  } finally {
+    if (previousPath === undefined) {
+      delete process.env.LOOPI_OPENCODE_PATH;
+    } else {
+      process.env.LOOPI_OPENCODE_PATH = previousPath;
+    }
+  }
 }
 
 async function testGetSupportedAgentIds() {
@@ -534,6 +617,12 @@ async function main() {
 
   await testParseCliModelListTreatsReasoningWithoutEffortAsThinkingToggle();
   console.log('  [PASS] parseCliModelList treats reasoning-without-effort models as thinking toggles');
+
+  await testParseCliAgentList();
+  console.log('  [PASS] parseCliAgentList extracts OpenCode agent IDs');
+
+  await testDiscoverOpencodeOptionsUsesCliModelsAndAgents();
+  console.log('  [PASS] discoverAdapterOptions uses OpenCode CLI model and agent discovery');
 
   await testGetSupportedAgentIds();
   console.log('  [PASS] getSupportedAgentIds returns supported agent IDs');

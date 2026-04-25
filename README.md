@@ -195,6 +195,8 @@ Any OpenAI-compatible HTTP endpoint can also be registered as a provider, whethe
 
 HTTP providers are always **read-only** in Loopi today. They can plan, review, and synthesize, but they cannot be the implementer.
 
+Provider readiness checks require the configured `model` to match a served model ID exactly, ignoring case. This avoids accidentally treating a similarly named model as ready.
+
 ## Quick Start
 
 After you install at least one agent CLI, validate your setup. This works even before `shared/task.json` exists:
@@ -277,7 +279,7 @@ With 3 planned sections, that is 4 total plan cycles and 6 total section impleme
 
 The important point is not just that Loopi has different modes. It is that each mode exposes a different kind of refinement loop, and you decide how much quality pressure and token spend a task deserves.
 
-You can also assign different agents to different seats in the workflow. In `one-shot`, for example, `settings.oneShotOrigins` lets one agent own planning, another own implementation, and another own review. A separate `roles.fallback` target can be used if a primary provider fails.
+You can also assign different agents to different seats in the workflow. In `one-shot`, for example, `settings.oneShotOrigins` lets one agent own planning, another own implementation, and another own review. A separate `roles.fallback` target can be used if a primary provider fails. Fallbacks inherit the failed step's temporary read/write policy, so an HTTP provider can back up read-only work but cannot replace a failed write-enabled step.
 
 ## The Loopi Pattern
 
@@ -313,6 +315,8 @@ In `one-shot` mode, the loop controls nest as follows:
 2. After the final plan result for that outer cycle is ready, implement each planned section.
 3. For each section, run the implement-review-repair loop `sectionImplementLoops` times.
 4. If there is another outer `qualityLoops` cycle remaining, rerun the full sequence again using the one-shot replan flow.
+
+The final one-shot implementation summary includes every completed unit, not only the last unit, so later review/replan passes can evaluate the full implementation.
 
 **Worked example:**
 

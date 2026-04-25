@@ -625,6 +625,28 @@ function parseCliModelList(outputText) {
   return Array.from(found.values());
 }
 
+function parseCliAgentList(outputText) {
+  const text = stripAnsi(outputText);
+  const found = new Map();
+  text.split(/\r?\n/).forEach((rawLine) => {
+    const line = rawLine.trim();
+    const match = line.match(/^([A-Za-z0-9_.-]+)\s+\(([^)]+)\)\s*$/);
+    if (!match) {
+      return;
+    }
+    const id = match[1];
+    const role = match[2];
+    if (!found.has(id)) {
+      found.set(id, {
+        id,
+        value: id,
+        label: `${id} (${role})`
+      });
+    }
+  });
+  return Array.from(found.values());
+}
+
 const REASONING_EFFORT_VARIANTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 const THINKING_TOGGLE_VARIANTS = new Set([
   'thinking',
@@ -816,7 +838,7 @@ async function discoverAdapterOptions(agentName, {
       }
       return;
     }
-    if (optionSchema.discovery.type !== 'cli' || optionSchema.discovery.command !== 'models') {
+    if (optionSchema.discovery.type !== 'cli') {
       return;
     }
 
@@ -833,12 +855,25 @@ async function discoverAdapterOptions(agentName, {
       return;
     }
 
-    const args = ['models'];
-    if (optionSchema.discovery.verbose) {
-      args.push('--verbose');
-    }
-    if (refresh) {
-      args.push('--refresh');
+    let args;
+    let parser;
+    let emptyMessage;
+    if (optionSchema.discovery.command === 'models') {
+      args = ['models'];
+      if (optionSchema.discovery.verbose) {
+        args.push('--verbose');
+      }
+      if (refresh) {
+        args.push('--refresh');
+      }
+      parser = parseCliModelList;
+      emptyMessage = 'No models were returned by the CLI.';
+    } else if (optionSchema.discovery.command === 'agents') {
+      args = ['agent', 'list'];
+      parser = parseCliAgentList;
+      emptyMessage = 'No agents were returned by the CLI.';
+    } else {
+      return;
     }
 
     const discoveryCommands = [resolvedPath];
@@ -856,14 +891,14 @@ async function discoverAdapterOptions(agentName, {
           timeoutMs
         });
         const combinedOutput = `${result.stdout || ''}\n${result.stderr || ''}`;
-        const models = parseCliModelList(combinedOutput);
+        const values = parser(combinedOutput);
         lastDiscoveryResult = {
-          status: models.length > 0 ? 'ready' : 'empty',
-          values: models,
+          status: values.length > 0 ? 'ready' : 'empty',
+          values,
           exitCode: result.exitCode,
-          error: models.length > 0 ? null : summarizeDiscoveryFailure(combinedOutput, result.exitCode)
+          error: values.length > 0 ? null : summarizeDiscoveryFailure(combinedOutput, result.exitCode, emptyMessage)
         };
-        if (models.length > 0) {
+        if (values.length > 0) {
           options[key] = lastDiscoveryResult;
           return;
         }
@@ -880,7 +915,7 @@ async function discoverAdapterOptions(agentName, {
       status: 'empty',
       values: [],
       exitCode: 0,
-      error: 'No models were returned by the CLI.'
+      error: emptyMessage
     };
   }));
 
@@ -1039,7 +1074,7 @@ async function discoverAllAdapterOptions(agentIds, options = {}) {
   }, {});
 }
 
-function summarizeDiscoveryFailure(outputText, exitCode) {
+function summarizeDiscoveryFailure(outputText, exitCode, emptyMessage = 'No models were returned by the CLI.') {
   const text = stripAnsi(outputText)
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -1050,8 +1085,8 @@ function summarizeDiscoveryFailure(outputText, exitCode) {
     return text;
   }
   return exitCode === 0
-    ? 'No models were returned by the CLI.'
-    : `Model discovery exited with code ${exitCode}.`;
+    ? emptyMessage
+    : `CLI discovery exited with code ${exitCode}.`;
 }
 
 function createUnknownAgentActionResult(agentId, actionType) {
@@ -1435,6 +1470,7 @@ module.exports = {
     cloneMetadata,
     adapterSelectionToOptionSchema,
     parseCliModelList,
+    parseCliAgentList,
     parseClaudeBundleModelOptions,
     discoverAdapterOptions,
     buildInstallInvocation,

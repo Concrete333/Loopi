@@ -52,6 +52,14 @@ It adds:
 - safe UI launch gating for draft validation and prepared-context blockers
 - live run-session monitoring through the local control plane
 
+Execution-boundary notes:
+
+- `settings.agentPolicies.*.canWrite` is the source of truth for write-enabled implement steps.
+- Adapter-specific agent mode options must not override the current step's read/write policy.
+- `roles.fallback` inherits the failed step's temporary read/write policy, but HTTP providers are read-only and cannot replace failed write-enabled steps.
+- HTTP provider readiness requires an exact case-insensitive model ID match from `/v1/models`.
+- One-shot implementation summaries aggregate all completed units.
+
 ## Key files
 
 | File | Role |

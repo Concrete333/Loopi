@@ -115,7 +115,12 @@ module.exports = async function registerOneShotTests(test) {
     assert.strictEqual(capturedCalls[1].unitContext.title, 'Second unit');
     assert.ok(capturedCalls[1].completedUnitsSummary.includes('commit-1: First unit'));
     assert.strictEqual(capturedCalls[1].unitContext.completedUnitsSummary, undefined);
-    assert.strictEqual(result.finalOutput, 'final for commit-2');
+    assert.ok(result.finalOutput.includes('final for commit-1'));
+    assert.ok(result.finalOutput.includes('final for commit-2'));
+    assert.strictEqual(result.finalHandoffData.status, 'DONE');
+    assert.strictEqual(result.finalHandoffData.units.length, 2);
+    assert.strictEqual(result.finalHandoffData.units[0].id, 'commit-1');
+    assert.strictEqual(result.finalHandoffData.units[1].id, 'commit-2');
   });
 
   await test('runOneShotUnitImplement stops on unit failure', async () => {

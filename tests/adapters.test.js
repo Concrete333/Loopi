@@ -258,6 +258,8 @@ function testKiloPrimaryInvocationUsesRunDir() {
 
   assert.deepEqual(invocation.args, [
     'run',
+    '--agent',
+    'plan',
     '--dir',
     'C:\\repo',
     'Review the repo'
@@ -274,6 +276,8 @@ function testKiloPrimaryInvocationEnablesAutoWhenCanWrite() {
 
   assert.deepEqual(invocation.args, [
     'run',
+    '--agent',
+    'code',
     '--auto',
     '--dir',
     'C:\\repo',
@@ -281,18 +285,22 @@ function testKiloPrimaryInvocationEnablesAutoWhenCanWrite() {
   ]);
 }
 
-function testKiloFallbackInvocationDropsAuto() {
+function testKiloFallbackInvocationInheritsCanWritePolicy() {
   const invocation = adapterTest.buildKiloFallbackInvocation('kilo.exe', {
     cwd: 'C:\\repo',
     timeoutMs: 1000,
-    prompt: 'Review the repo'
+    prompt: 'Implement the repo',
+    canWrite: true
   });
 
   assert.deepEqual(invocation.args, [
     'run',
+    '--agent',
+    'code',
+    '--auto',
     '--dir',
     'C:\\repo',
-    'Review the repo'
+    'Implement the repo'
   ]);
 }
 
@@ -1225,6 +1233,27 @@ function testResolveExtraOptionArgsKilo() {
   assert.deepEqual(result.warnings, []);
 }
 
+function testKiloPolicyOverridesExplicitAgentOption() {
+  const opts = buildResolvedOptions('kilo', {
+    cwd: 'C:\\repo',
+    timeoutMs: 1000,
+    prompt: 'Review safely',
+    canWrite: false,
+    agentOptions: {
+      agent: 'code',
+      thinking: true
+    }
+  });
+  const invocation = adapterTest.buildKiloPrimaryInvocation('kilo.exe', opts);
+  const agentIdx = invocation.args.indexOf('--agent');
+
+  assert.strictEqual(invocation.args[agentIdx + 1], 'plan',
+    'Kilo read-only policy should override explicit code agent option');
+  assert.strictEqual(invocation.args.filter((arg) => arg === '--agent').length, 1,
+    'Kilo policy agent should not duplicate explicit --agent options');
+  assert.ok(invocation.args.includes('--thinking'), 'Kilo still forwards non-policy options');
+}
+
 function testResolveEffortArgsKiloUsesVariantFlag() {
   const { resolveEffortArgs } = require('../src/adapters');
 
@@ -1304,7 +1333,7 @@ function testResolveModelArgsOpencodeFixed() {
 function testResolveEffortArgsFixedAdapters() {
   const { resolveEffortArgs } = require('../src/adapters');
 
-  for (const agent of ['qwen', 'opencode']) {
+  for (const agent of ['qwen']) {
     const result = resolveEffortArgs(agent, null, 'high');
     assert.deepEqual(result.args, [], `${agent} effort produces no args`);
     assert.ok(
@@ -1312,6 +1341,14 @@ function testResolveEffortArgsFixedAdapters() {
       `${agent} effort produces unsupported_effort_option warning`
     );
   }
+}
+
+function testResolveEffortArgsOpencodeVariant() {
+  const { resolveEffortArgs } = require('../src/adapters');
+
+  const result = resolveEffortArgs('opencode', 'opencode/claude-haiku-4-5', 'high');
+  assert.deepEqual(result.args, ['--variant', 'high']);
+  assert.deepEqual(result.warnings, []);
 }
 
 function testResolveEffortArgsClaude() {
@@ -1519,16 +1556,42 @@ function testOpencodePrimaryBuilderAppliesModelOptions() {
     timeoutMs: 1000,
     prompt: 'Do it',
     model: 'anthropic/claude-sonnet',
+    effort: 'high',
     agentOptions: {
-      agent: 'plan'
+      agent: 'plan',
+      showThinking: true
     }
   });
   const invocation = adapterTest.buildOpencodeInvocation('opencode.exe', opts);
 
   assert.ok(invocation.args.includes('--model'), 'opencode forwards model selection');
+  assert.ok(invocation.args.includes('--variant'), 'opencode forwards model variant selection');
   assert.ok(invocation.args.includes('--agent'), 'opencode forwards agent selection');
+  assert.ok(invocation.args.includes('--thinking'), 'opencode forwards show-thinking selection');
   assert.strictEqual(invocation.args.filter((arg) => arg === '--agent').length, 1,
     'explicit opencode agent selection should not duplicate write-mode --agent flags');
+}
+
+function testOpencodePolicyOverridesExplicitAgentOption() {
+  const opts = buildResolvedOptions('opencode', {
+    cwd: 'C:\\repo',
+    timeoutMs: 1000,
+    prompt: 'Review safely',
+    mode: 'review',
+    canWrite: false,
+    agentOptions: {
+      agent: 'build',
+      showThinking: true
+    }
+  });
+  const invocation = adapterTest.buildOpencodeInvocation('opencode.exe', opts);
+  const agentIdx = invocation.args.indexOf('--agent');
+
+  assert.strictEqual(invocation.args[agentIdx + 1], 'plan',
+    'OpenCode read-only policy should override explicit build agent option');
+  assert.strictEqual(invocation.args.filter((arg) => arg === '--agent').length, 1,
+    'OpenCode policy agent should not duplicate explicit --agent options');
+  assert.ok(invocation.args.includes('--thinking'), 'OpenCode still forwards non-policy options');
 }
 
 // ── Commit 5: Provider Registry and Capability Tests ───────────────────────
@@ -2527,6 +2590,51 @@ function testClassifyPreflightResultAuthFailure() {
   }
 }
 
+async function testReadinessDoesNotUseSubstringModelMatches() {
+  const { checkProviderReadiness } = require('../src/adapters');
+
+  const { port, close } = await startMockHttpServer(200, {
+    data: [
+      { id: 'gpt-4o-mini', object: 'model' }
+    ]
+  });
+  try {
+    const result = await checkProviderReadiness({
+      id: 'test-provider',
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      model: 'gpt-4'
+    });
+
+    assert.strictEqual(result.ready, false, 'substring model names should not be treated as ready');
+    assert.strictEqual(result.failureReason, 'model_not_found');
+    assert.strictEqual(result.modelConfirmed, false);
+  } finally {
+    await close();
+  }
+}
+
+async function testReadinessModelMatchIsCaseInsensitiveExact() {
+  const { checkProviderReadiness } = require('../src/adapters');
+
+  const { port, close } = await startMockHttpServer(200, {
+    data: [
+      { id: 'GPT-4O-MINI', object: 'model' }
+    ]
+  });
+  try {
+    const result = await checkProviderReadiness({
+      id: 'test-provider',
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      model: 'gpt-4o-mini'
+    });
+
+    assert.strictEqual(result.ready, true, 'exact model match should be case-insensitive');
+    assert.strictEqual(result.modelConfirmed, true);
+  } finally {
+    await close();
+  }
+}
+
 function testClassifyPreflightResultSuccessWithAuthReferenceStaysOk() {
   const { classifyPreflightResult } = require('../src/adapters').__test;
 
@@ -2935,7 +3043,7 @@ async function main() {
   testCodexPreflightInvocationTargetsExecHelp();
   testKiloPrimaryInvocationUsesRunDir();
   testKiloPrimaryInvocationEnablesAutoWhenCanWrite();
-  testKiloFallbackInvocationDropsAuto();
+  testKiloFallbackInvocationInheritsCanWritePolicy();
   testKiloPreflightInvocationTargetsRunHelp();
   testKiloFallbackDetection();
   testKiloFatalOutputDetection();
@@ -2988,6 +3096,7 @@ async function main() {
   testResolveModelArgsCodexOpen();
   testResolveModelArgsKiloOpen();
   testResolveExtraOptionArgsKilo();
+  testKiloPolicyOverridesExplicitAgentOption();
   testResolveEffortArgsKiloUsesVariantFlag();
   testResolveEffortArgsCodex();
   testResolveEffortArgsUnsupported();
@@ -2996,6 +3105,7 @@ async function main() {
   testResolveModelArgsQwenFixed();
   testResolveModelArgsOpencodeFixed();
   testResolveEffortArgsFixedAdapters();
+  testResolveEffortArgsOpencodeVariant();
   testResolveEffortArgsClaude();
   testGeminiPrimaryInvocationWithModel();
   testGeminiPrimaryInvocationWithoutModel();
@@ -3022,6 +3132,7 @@ async function main() {
   testKiloPrimaryBuilderAppliesDiscoveredStyleOptions();
   testQwenPrimaryBuilderProducesWarnings();
   testOpencodePrimaryBuilderAppliesModelOptions();
+  testOpencodePolicyOverridesExplicitAgentOption();
 
   // Commit 5: Provider Registry and Capability Tests
   testGetCapabilityProfileClaude();
@@ -3069,6 +3180,8 @@ async function main() {
   await testReadinessHealthFailsModelsSucceeds();
   await testReadinessAuthFailure();
   await testReadinessModelNotFound();
+  await testReadinessDoesNotUseSubstringModelMatches();
+  await testReadinessModelMatchIsCaseInsensitiveExact();
   await testReadinessMalformedResponse();
   testReadinessProviderIdPreservedFromNormalization();
   await testReadinessHealthEndpointPathBug();

@@ -23,7 +23,8 @@ You can configure local or remote OpenAI-compatible endpoints under top-level `p
 
 Notes:
 
-- `model` is the served API model name, not necessarily the underlying checkpoint path on disk.
+- `model` is the served API model ID, not necessarily the underlying checkpoint path on disk.
+- Readiness checks require this configured `model` to match a `/v1/models` ID exactly, ignoring case. Similar names such as `gpt-4` and `gpt-4o-mini` are treated as different models.
 - HTTP providers are read-only in v1. They can plan and review, but they cannot be the implement origin.
 - Readiness checks run before the mode starts. If a provider fails readiness, the run stops early with a clear error.
 - `maxInputChars` feeds into full-context selection.
@@ -61,6 +62,7 @@ Important behavior:
 - Loopi still treats role targets as valid execution targets for preflight resolution and CLI-backed `agentPolicies` and `agentOptions`.
 - Run logs and scratchpad metadata continue to show the declared `agents` list.
 - `roles.fallback` currently triggers on any non-`ok` step result, not just retryable transport failures.
+- The fallback inherits the failed step's temporary read/write policy. A CLI fallback can back up a write-enabled step; an HTTP provider fallback is skipped for write-enabled steps because HTTP providers are read-only.
 - Pointing `roles.fallback` at a paid remote model can lead to unexpected backup invocations if your primary provider is flaky.
 
 One practical one-shot pattern is:

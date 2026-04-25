@@ -1785,6 +1785,120 @@ test('codex discovered local models render as a model dropdown', () => {
     'codex effort dropdown should render string labels, not object coercions');
 });
 
+test('opencode discovered models and agents populate CLI-backed controls', () => {
+  const document = createFakeDocument();
+  const fetch = createFetchStub();
+  const app = createLoopiApp({ document, fetch, navigator: {} });
+
+  app.state.bootstrap = {
+    adapterMetadata: [
+      { id: 'opencode', displayName: 'OpenCode', supportsWriteAccess: true }
+    ],
+    adapterOptions: [
+      {
+        agentId: 'opencode',
+        displayName: 'OpenCode',
+        schema: {
+          agentId: 'opencode',
+          options: {
+            model: {
+              key: 'model',
+              label: 'Model',
+              mode: 'startup_flag',
+              kind: 'open',
+              flag: '--model',
+              allowCustom: true,
+              values: [],
+              discovery: { type: 'cli', command: 'models', verbose: true }
+            },
+            effort: {
+              key: 'effort',
+              label: 'Effort',
+              mode: 'model_dependent',
+              kind: 'open',
+              flag: '--variant',
+              values: []
+            },
+            agent: {
+              key: 'agent',
+              label: 'Agent Mode',
+              mode: 'startup_flag',
+              kind: 'enum',
+              flag: '--agent',
+              allowCustom: true,
+              values: [
+                { value: 'plan', label: 'plan' },
+                { value: 'build', label: 'build' }
+              ],
+              discovery: { type: 'cli', command: 'agents' }
+            },
+            showThinking: {
+              key: 'showThinking',
+              label: 'Show Thinking',
+              mode: 'boolean_flag',
+              kind: 'boolean',
+              flag: '--thinking',
+              values: []
+            }
+          }
+        }
+      }
+    ]
+  };
+  app.state.adapterDiscovery = {
+    opencode: {
+      agentId: 'opencode',
+      status: 'ready',
+      options: {
+        model: {
+          status: 'ready',
+          values: [
+            { id: 'opencode/claude-haiku-4-5', label: 'opencode/claude-haiku-4-5 (Claude Haiku 4.5)', efforts: ['high', 'max'] }
+          ]
+        },
+        agent: {
+          status: 'ready',
+          values: [
+            { value: 'explore', label: 'explore (subagent)' },
+            { value: 'plan', label: 'plan (primary)' },
+            { value: 'build', label: 'build (primary)' }
+          ]
+        }
+      }
+    }
+  };
+
+  app.__test.setConfigRaw({
+    mode: 'plan',
+    prompt: 'OpenCode options',
+    agents: ['opencode'],
+    settings: {
+      agentOptions: {
+        opencode: {
+          model: 'opencode/claude-haiku-4-5',
+          effort: 'high',
+          agent: 'explore',
+          showThinking: true
+        }
+      }
+    }
+  }, { renderNow: false, draftMode: 'new' });
+
+  app.render();
+  const settingsHtml = app.__test.getPanelHtml('settings');
+
+  assert.ok(settingsHtml.includes('<select data-agent-option="opencode:model"'),
+    'OpenCode discovered models should render as a dropdown');
+  assert.ok(settingsHtml.includes('Claude Haiku 4.5'),
+    'OpenCode model labels should come from verbose CLI metadata');
+  assert.ok(/data-agent-option="opencode:effort"[\s\S]*?<option value="max"/.test(settingsHtml),
+    'OpenCode effort should be populated from model variants');
+  assert.ok(/data-agent-option="opencode:agent"[\s\S]*?<option value="explore" selected>explore \(subagent\)<\/option>/.test(settingsHtml),
+    'OpenCode agent mode should include agents discovered from the CLI');
+  assert.ok(/data-agent-option="opencode:showThinking"[\s\S]*?<option value="true" selected>On<\/option>/.test(settingsHtml),
+    'OpenCode --thinking should render as a real boolean CLI flag');
+});
+
 test('claude effort dropdown follows the CLI effort enum', () => {
   const document = createFakeDocument();
   const fetch = createFetchStub();

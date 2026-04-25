@@ -96,7 +96,8 @@ Rules:
 - Write access only applies during `implement` mode, and only to the origin agent for that sub-run.
 - `plan` and `review` modes are always read-only, regardless of agent policy.
 - Loopi passes the `canWrite` intent to each agent's CLI. The actual CLI flags used depend on the installed tool.
-- For Kilo, write-enabled implement steps run with `kilo run --auto`; read-only steps omit `--auto` and rely on the read-only prompt.
+- For Kilo, read-only steps run with `--agent plan`; write-enabled implement steps run with `--agent code --auto`.
+- For Opencode, read-only steps run with `--agent plan`; write-enabled implement steps run with `--agent build`.
 - A validation warning is emitted when `canWrite: true` is configured, reminding you that the agent will modify repository files directly.
 
 ## Agent Options
@@ -117,8 +118,9 @@ Rules:
 - All agent options are optional. Omit a field to use the CLI default.
 - Keys must match a CLI adapter that appears either in the top-level `agents` list or in a CLI-backed role assignment.
 - Nested option keys are derived from the adapter config. This keeps validation strict while allowing adapters such as Kilo or Opencode to expose extra fields like `agent` or `thinking`.
+- Adapter `agent` options are preference fields only. Loopi's `canWrite` policy is the source of truth for read/write agent mode, so Kilo and Opencode policy flags override any conflicting `agentOptions.<agent>.agent` value for the current step.
 - When an option cannot be applied, a warning is recorded on the step record and appears in the scratchpad output.
-- The UX app discovers model lists from local adapter state when available. Kilo and Opencode use their `models` command; Kilo uses verbose model metadata to populate model-specific `effort` values from variants; Codex reads local `config.toml` model and migration hints; Claude reads model-picker options from the installed CLI bundle; unavailable discovery falls back to manual entry.
+- The UX app discovers model lists from local adapter state when available. Kilo and Opencode use their `models --verbose` command to populate model-specific `effort` values from variants; Opencode also discovers agent modes from `agent list`; Codex reads local `config.toml` model and migration hints; Claude reads model-picker options from the installed CLI bundle; unavailable discovery falls back to manual entry.
 
 Per-agent support summary:
 
@@ -129,13 +131,15 @@ Per-agent support summary:
 | gemini | Applied via `--model` for supported Gemini values | Not supported | None |
 | kilo | Applied via `--model`; the UX app can discover installed CLI model choices and includes Kilo Auto Frontier/Balanced/Free | `effort` is passed via Kilo's `--variant` flag and populated per discovered model when variants are exposed | `agent`, model-aware `thinking` |
 | qwen | Fixed model only | Not supported | None |
-| opencode | Applied via `--model`; the UX app can discover installed CLI model choices | Not supported | `agent` |
+| opencode | Applied via `--model`; the UX app discovers installed CLI model choices | Applied via `--variant` from discovered model variants | `agent`, `showThinking` |
 
 Unknown keys are rejected. Each `agentOptions.<agent>` object may only contain keys declared by that adapter.
 
 ## Fallback Downgrades
 
 When an agent's primary invocation fails and a fallback is used, some capabilities may be lost. Loopi records these as `capabilityDowngrades` on the step record.
+
+`roles.fallback` inherits the failed step's temporary execution policy. This allows a CLI fallback to back up a write-enabled step, but HTTP providers are skipped for write-enabled fallback attempts because HTTP providers are read-only.
 
 | Agent | Fallback | Capabilities dropped |
 | --- | --- | --- |
@@ -167,6 +171,7 @@ Rules:
 - Missing entries fall back to the first agent in `agents`.
 - Write access in the implement sub-run follows the implement origin.
 - One-shot implement loops run per structured plan section using `settings.sectionImplementLoops`.
+- The final one-shot implementation summary aggregates every completed unit, so review/replan cycles see the whole implementation rather than only the last unit.
 
 See `shared/task.example.json` for a complete example.
 

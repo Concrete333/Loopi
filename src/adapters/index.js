@@ -200,6 +200,10 @@ function splitRequestDefaults(requestDefaults) {
   return { transport, payload };
 }
 
+function normalizeProviderModelId(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
 function buildRequestBody(providerConfig, promptText) {
   const { payload } = splitRequestDefaults(providerConfig.requestDefaults);
   const chatTemplateMode = providerConfig.chatTemplateMode || 'openai';
@@ -815,10 +819,10 @@ async function checkProviderReadiness(providerConfig) {
 
   // Check if configured model is in the list
   const configuredModel = providerConfig.model;
+  const configuredModelId = normalizeProviderModelId(configuredModel);
   const modelConfirmed = rawModels.some(m => {
-    const modelName = String(m).toLowerCase();
-    const configured = String(configuredModel).toLowerCase();
-    return modelName === configured || modelName.includes(configured) || configured.includes(modelName);
+    const modelName = normalizeProviderModelId(m);
+    return modelName === configuredModelId;
   });
 
   if (!modelConfirmed) {
@@ -2026,6 +2030,22 @@ function resolveExtraOptionArgs(agentName, requestedOptions = {}) {
   return { args, warnings };
 }
 
+function removeFlagValueArgs(args, flag) {
+  const result = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === flag) {
+      i += 1;
+      continue;
+    }
+    result.push(args[i]);
+  }
+  return result;
+}
+
+function resolveKiloPolicyAgentArgs(canWrite) {
+  return ['--agent', canWrite === true ? 'code' : 'plan'];
+}
+
 function buildClaudePrimaryInvocation(command, options) {
   const writeModeArgs = resolveWriteModeArgs('claude', options.canWrite);
   const modelArgs = options.resolvedModelArgs && options.resolvedModelArgs.args
@@ -2311,15 +2331,20 @@ function buildKiloPreflightInvocation(command, options) {
 function buildKiloPrimaryInvocation(command, options) {
   const modelArgs = options.resolvedModelArgs && options.resolvedModelArgs.args || [];
   const effortArgs = options.resolvedEffortArgs && options.resolvedEffortArgs.args || [];
-  const extraOptionArgs = options.resolvedExtraOptionArgs && options.resolvedExtraOptionArgs.args || [];
+  const extraOptionArgs = removeFlagValueArgs(
+    options.resolvedExtraOptionArgs && options.resolvedExtraOptionArgs.args || [],
+    '--agent'
+  );
+  const policyAgentArgs = resolveKiloPolicyAgentArgs(options.canWrite);
   const autoArgs = options.canWrite === true ? ['--auto'] : [];
-  const displayArgs = [...modelArgs, ...effortArgs, ...extraOptionArgs, ...autoArgs];
+  const displayArgs = [...modelArgs, ...effortArgs, ...extraOptionArgs, ...policyAgentArgs, ...autoArgs];
   const displayOptions = displayArgs.length > 0 ? `${displayArgs.join(' ')} ` : '';
   const args = [
     'run',
     ...modelArgs,
     ...effortArgs,
     ...extraOptionArgs,
+    ...policyAgentArgs,
     ...autoArgs,
     '--dir',
     options.cwd,
@@ -2341,12 +2366,19 @@ function buildKiloPrimaryInvocation(command, options) {
 function buildKiloFallbackInvocation(command, options) {
   const modelArgs = options.resolvedModelArgs && options.resolvedModelArgs.args || [];
   const effortArgs = options.resolvedEffortArgs && options.resolvedEffortArgs.args || [];
-  const extraOptionArgs = options.resolvedExtraOptionArgs && options.resolvedExtraOptionArgs.args || [];
+  const extraOptionArgs = removeFlagValueArgs(
+    options.resolvedExtraOptionArgs && options.resolvedExtraOptionArgs.args || [],
+    '--agent'
+  );
+  const policyAgentArgs = resolveKiloPolicyAgentArgs(options.canWrite);
+  const autoArgs = options.canWrite === true ? ['--auto'] : [];
   const args = [
     'run',
     ...modelArgs,
     ...effortArgs,
     ...extraOptionArgs,
+    ...policyAgentArgs,
+    ...autoArgs,
     '--dir',
     options.cwd,
     options.prompt
@@ -2358,7 +2390,7 @@ function buildKiloFallbackInvocation(command, options) {
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     env: process.env,
-    displayCommand: `${path.basename(command)} run ${[...modelArgs, ...effortArgs, ...extraOptionArgs].join(' ')} --dir ${options.cwd} [prompt]`,
+    displayCommand: `${path.basename(command)} run ${[...modelArgs, ...effortArgs, ...extraOptionArgs, ...policyAgentArgs, ...autoArgs].join(' ')} --dir ${options.cwd} [prompt]`,
     earlyExitClassifier: classifyKiloFatalOutput,
     warnings: []
   };
@@ -2675,14 +2707,18 @@ function buildOpencodePreflightInvocation(command, options) {
 function buildOpencodeInvocation(command, options) {
   const mode = options.mode || 'plan';
   const useWriteAgent = mode === 'implement' && options.canWrite;
-  const explicitAgent = options.agentOptions && options.agentOptions.agent;
-  const writeModeArgs = explicitAgent ? [] : resolveWriteModeArgs('opencode', useWriteAgent);
+  const writeModeArgs = resolveWriteModeArgs('opencode', useWriteAgent);
   const modelArgs = options.resolvedModelArgs && options.resolvedModelArgs.args || [];
-  const extraOptionArgs = options.resolvedExtraOptionArgs && options.resolvedExtraOptionArgs.args || [];
+  const effortArgs = options.resolvedEffortArgs && options.resolvedEffortArgs.args || [];
+  const extraOptionArgs = removeFlagValueArgs(
+    options.resolvedExtraOptionArgs && options.resolvedExtraOptionArgs.args || [],
+    '--agent'
+  );
   const args = [
     'run',
     ...writeModeArgs,
     ...modelArgs,
+    ...effortArgs,
     ...extraOptionArgs,
     options.prompt
   ];
@@ -2693,7 +2729,7 @@ function buildOpencodeInvocation(command, options) {
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     env: process.env,
-    displayCommand: `${path.basename(command)} run ${[...writeModeArgs, ...modelArgs, ...extraOptionArgs].join(' ')} [prompt]`,
+    displayCommand: `${path.basename(command)} run ${[...writeModeArgs, ...modelArgs, ...effortArgs, ...extraOptionArgs].join(' ')} [prompt]`,
     earlyExitClassifier: classifyOpencodeFatalOutput,
     warnings: options.warnings || []
   };

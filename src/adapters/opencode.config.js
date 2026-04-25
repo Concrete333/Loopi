@@ -1,5 +1,5 @@
-// Opencode model selection mechanism is pending investigation.
-// Marked as fixed until we confirm a non-interactive startup/config-file path.
+// OpenCode exposes these controls through `opencode run --help`.
+// Model and agent lists are discovered from the installed CLI at runtime.
 module.exports = {
   agent: 'opencode',
   selection: {
@@ -9,18 +9,30 @@ module.exports = {
       values: 'open',
       discovery: {
         type: 'cli',
-        command: 'models'
+        command: 'models',
+        verbose: true
       }
     },
     effort: {
-      mode: 'unsupported'
+      mode: 'model_dependent',
+      flag: '--variant',
+      passThrough: true
     },
     agent: {
       mode: 'startup_flag',
       flag: '--agent',
       values: ['plan', 'build'],
       passThrough: true,
-      label: 'Agent Mode'
+      label: 'Agent Mode',
+      discovery: {
+        type: 'cli',
+        command: 'agents'
+      }
+    },
+    showThinking: {
+      mode: 'boolean_flag',
+      flag: '--thinking',
+      label: 'Show Thinking'
     }
   },
   writeMode: {
